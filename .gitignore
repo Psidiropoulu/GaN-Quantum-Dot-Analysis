@@ -1,0 +1,97 @@
+# ==========================
+# Python environments
+# ==========================
+
+venv/
+.venv/
+env/
+ENV/
+
+# ==========================
+# Python cache
+# ==========================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ==========================
+# Jupyter
+# ==========================
+
+.ipynb_checkpoints/
+
+# ==========================
+# VSCode
+# ==========================
+
+.vscode/
+
+# ==========================
+# AFM raw data
+# ==========================
+# Large experimental files
+
+*.spm
+*.gwy
+*.tif
+*.tiff
+*.png
+
+# processed data
+data_gwy/
+data_numpy/
+results/
+
+# ==========================
+# Generated AFM conversions
+# ==========================
+
+data_gwy/
+data_numpy/
+data_processed/
+aligned_data/
+
+# ==========================
+# Analysis outputs
+# ==========================
+
+results/
+figures/
+plots/
+exports/
+
+# ==========================
+# Machine learning outputs
+# ==========================
+
+models/
+checkpoints/
+*.h5
+*.keras
+*.ckpt
+tensorboard_logs/
+
+# ==========================
+# Temporary files
+# ==========================
+
+*.tmp
+*.log
+*.swp
+.DS_Store
+
+# ==========================
+# Build / package files
+# ==========================
+
+build/
+dist/
+*.egg-info/
+
+# ==========================
+# OS files
+# ==========================
+
+.DS_Store
+Thumbs.db
