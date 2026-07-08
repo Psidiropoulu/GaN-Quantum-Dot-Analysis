@@ -2,7 +2,8 @@
 # Python environments
 # ==========================
 
-venv/
+venv-afm/
+venv-ml/
 .venv/
 env/
 ENV/
@@ -28,43 +29,26 @@ __pycache__/
 .vscode/
 
 # ==========================
-# AFM raw data
+# AFM raw data (large experimental files)
 # ==========================
-# Large experimental files
 
 *.spm
 *.gwy
-*.tif
-*.tiff
-*.png
 
-# processed data
-data_gwy/
-data_numpy/
-results/
-
-# ==========================
-# Generated AFM conversions
-# ==========================
-
+# Only ignore large TIFF/PNG from AFM processing
 data_gwy/
 data_numpy/
 data_processed/
 aligned_data/
-
-# ==========================
-# Analysis outputs
-# ==========================
-
 results/
+
+# ==========================
+# Generated / analysis outputs
+# ==========================
+
 figures/
 plots/
 exports/
-
-# ==========================
-# Machine learning outputs
-# ==========================
-
 models/
 checkpoints/
 *.h5
@@ -73,13 +57,14 @@ checkpoints/
 tensorboard_logs/
 
 # ==========================
-# Temporary files
+# Temporary / OS files
 # ==========================
 
 *.tmp
 *.log
 *.swp
 .DS_Store
+Thumbs.db
 
 # ==========================
 # Build / package files
@@ -88,10 +73,3 @@ tensorboard_logs/
 build/
 dist/
 *.egg-info/
-
-# ==========================
-# OS files
-# ==========================
-
-.DS_Store
-Thumbs.db

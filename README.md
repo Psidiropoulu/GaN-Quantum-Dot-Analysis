@@ -14,7 +14,7 @@ AFM preprocessing
 ↓
 FFT / filtering
 ↓
-dot detection
+dot detection via simple thresholding
 ↓
 machine learning analysis
 
