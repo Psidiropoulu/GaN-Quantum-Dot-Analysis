@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import traceback
 from pathlib import Path
+from dataclasses import dataclass, field
 
 import tkinter as tk
 from tkinter import filedialog, ttk
@@ -60,6 +61,90 @@ def percentile_limits(z: np.ndarray, low: float = 1, high: float = 99) -> tuple[
 
 
 # ==========================================================
+# Blob model
+# ==========================================================
+
+@dataclass
+class Blob:
+    """
+    Represents one detected quantum dot.
+
+    The Blob owns:
+    - its position and geometry;
+    - its calculated AFM height measurements;
+    - any manually entered notes;
+    - conversion to a dictionary for CSV export.
+    """
+
+    cx: float
+    cy: float
+    radius: float
+    area: float
+    circularity: float
+
+    dot_height: float | None = None
+    background_height: float | None = None
+    relative_height: float | None = None
+    notes: str = ""
+
+    def contains(self, x: float, y: float, padding: float = 2.0) -> bool:
+        """Return True when image coordinate (x, y) lies inside the blob."""
+        distance = float(np.hypot(self.cx - x, self.cy - y))
+        return distance <= self.radius + padding
+
+    def calculate_height_parameters(
+        self,
+        image: np.ndarray,
+        background_inner_scale: float = 1.5,
+        background_outer_scale: float = 2.5,
+    ) -> None:
+
+        rows, cols = np.indices(image.shape)
+
+        distance_squared = (
+            (cols - self.cx) ** 2
+            + (rows - self.cy) ** 2
+        )
+
+        # Pixels belonging to the detected dot
+        dot_mask = distance_squared <= self.radius**2
+
+        # Pixels in a ring around the dot
+        inner_radius = background_inner_scale * self.radius
+        outer_radius = background_outer_scale * self.radius
+
+        background_mask = (
+            (distance_squared >= inner_radius**2)
+            & (distance_squared <= outer_radius**2)
+        )
+
+        dot_pixels = image[dot_mask]
+        background_pixels = image[background_mask]
+
+        self.dot_height = float(np.max(dot_pixels))
+        self.background_height = float(np.mean(background_pixels))
+
+        self.relative_height = (
+            self.dot_height
+            - self.background_height
+        )
+
+        def to_dict(self) -> dict[str, object]:
+            """Return all blob data in a CSV-friendly dictionary."""
+            return {
+                "cx": self.cx,
+                "cy": self.cy,
+                "r": self.radius,
+                "area": self.area,
+                "circularity": self.circularity,
+                "blob.dot_height": self.dot_height,
+                "blob.background_height": self.background_height,
+                "blob.relative_height": self.relative_height,
+                "notes": self.notes,
+            }
+
+
+# ==========================================================
 # Tkinter Application
 # ==========================================================
 
@@ -80,8 +165,8 @@ class QDAnalysisApp:
         self.raw_mask: np.ndarray | None = None
         self.binary_mask: np.ndarray | None = None
 
-        # Each feature is a dict: cx, cy, r, area, circularity
-        self.features: list[dict[str, object]] = []
+        # Each detected quantum dot is represented by a Blob object.
+        self.features: list[Blob] = []
 
         self.edit_mode: str | None = None  # 'FP', 'FN', or None
         self.sliders_active = True
@@ -371,17 +456,18 @@ class QDAnalysisApp:
                     cy, cx = prop.centroid
                     radius = float(prop.equivalent_diameter_area / 2.0)
 
-                    self.features.append(
-                        {
-                            "cx": float(cx),
-                            "cy": float(cy),
-                            "r": radius,
-                            "area": float(prop.area),
-                            "circularity": circularity,
-                        }
+                    blob = Blob(
+                        cx=float(cx),
+                        cy=float(cy),
+                        radius=radius,
+                        area=float(prop.area),
+                        circularity=circularity,
                     )
 
-                    self.binary_mask[prop.coords[:, 0], prop.coords[:, 1]] = 1
+                    blob.calculate_height_parameters(self.raw_image)
+                    self.features.append(blob)
+
+                    # self.binary_mask[prop.coords[:, 0], prop.coords[:, 1]] = 1
 
         self.update_plots()
 
@@ -412,7 +498,7 @@ class QDAnalysisApp:
 
         if self.show_labels:
             for f in self.features:
-                circle = plt.Circle((f["cx"], f["cy"]), f["r"] + 2, color="cyan", fill=False, lw=1.0)
+                circle = plt.Circle((f.cx, f.cy), f.radius + 2, color="cyan", fill=False, lw=1.0)
                 self.axs[0, 0].add_patch(circle)
 
         # Plot 2: top-hat image
@@ -525,15 +611,14 @@ class QDAnalysisApp:
         """Return the index of the blob containing image coordinate (x, y)."""
         matches: list[tuple[float, int]] = []
 
-        for index, feature in enumerate(self.features):
-            distance = float(np.hypot(feature["cx"] - x, feature["cy"] - y))
-            if distance <= feature["r"] + 2:
+        for index, blob in enumerate(self.features):
+            if blob.contains(x, y):
+                distance = float(np.hypot(blob.cx - x, blob.cy - y))
                 matches.append((distance, index))
 
         if not matches:
             return None
 
-        # If circles overlap, select the blob whose centre is closest.
         return min(matches, key=lambda item: item[0])[1]
 
     def open_blob_dialog(self, feature_index: int) -> None:
@@ -548,12 +633,12 @@ class QDAnalysisApp:
             existing_window.focus_force()
             return
 
-        feature = self.features[feature_index]
+        blob = self.features[feature_index]
 
         popup = tk.Toplevel(self.root)
         popup.title(f"Quantum dot {feature_index + 1}")
-        popup.geometry("440x390")
-        popup.minsize(380, 330)
+        popup.geometry("460x500")
+        popup.minsize(420, 440)
 
         self.blob_windows[feature_index] = popup
 
@@ -577,11 +662,11 @@ class QDAnalysisApp:
         info.pack(fill=tk.X, padx=18, pady=(16, 8))
 
         values = [
-            ("Centre x", f'{float(feature["cx"]):.2f} px'),
-            ("Centre y", f'{float(feature["cy"]):.2f} px'),
-            ("Radius", f'{float(feature["r"]):.2f} px'),
-            ("Area", f'{float(feature["area"]):.2f} px²'),
-            ("Circularity", f'{float(feature["circularity"]):.3f}'),
+            ("Centre x", f'{float(blob.cx):.2f} px'),
+            ("Centre y", f'{float(blob.cy):.2f} px'),
+            ("Radius", f'{float(blob.radius):.2f} px'),
+            ("Area", f'{float(blob.area):.2f} px²'),
+            ("Circularity", f'{float(blob.circularity):.3f}'),
         ]
 
         for row, (name, value) in enumerate(values):
@@ -595,13 +680,51 @@ class QDAnalysisApp:
         info.columnconfigure(0, weight=1)
         info.columnconfigure(1, weight=1)
 
+        height_frame = ttk.LabelFrame(popup, text="Height measurements")
+        height_frame.pack(fill=tk.X, padx=18, pady=(8, 8))
+        height_frame.columnconfigure(1, weight=1)
+
+        height_entries = [
+            ("Dot height", blob.dot_height),
+            ("Average background height", blob.background_height),
+            ("Dot height above background", blob.relative_height),
+        ]
+
+        for row, (label_text, value) in enumerate(height_entries):
+            ttk.Label(
+                height_frame,
+                text=label_text,
+            ).grid(
+                row=row,
+                column=0,
+                sticky="w",
+                padx=(10, 12),
+                pady=5,
+            )
+
+            entry = ttk.Entry(
+                height_frame,
+                width=22,
+            )
+
+            entry.insert(0, f"{value:.10e}")
+            entry.configure(state="readonly")
+
+            entry.grid(
+                row=row,
+                column=1,
+                sticky="ew",
+                padx=(0, 10),
+                pady=5,
+            )
+
         tk.Label(popup, text="Notes / future data", anchor="w").pack(
             fill=tk.X, padx=18, pady=(12, 4)
         )
 
         notes_box = tk.Text(popup, height=6, wrap=tk.WORD)
         notes_box.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 12))
-        notes_box.insert("1.0", str(feature.get("notes", "")))
+        notes_box.insert("1.0", str(blob.notes))
 
         buttons = tk.Frame(popup)
         buttons.pack(fill=tk.X, padx=18, pady=(0, 16))
@@ -623,7 +746,7 @@ class QDAnalysisApp:
             return
 
         notes = notes_box.get("1.0", tk.END).strip()
-        self.features[feature_index]["notes"] = notes
+        self.features[feature_index].notes = notes
 
         popup = self.blob_windows.get(feature_index)
         if popup is not None and popup.winfo_exists():
@@ -644,7 +767,7 @@ class QDAnalysisApp:
         if not self.features:
             return
 
-        distances = [(idx, np.hypot(f["cx"] - x, f["cy"] - y)) for idx, f in enumerate(self.features)]
+        distances = [(idx, np.hypot(f.cx - x, f.cy - y)) for idx, f in enumerate(self.features)]
         nearest_idx, dist = min(distances, key=lambda item: item[1])
         nearest_feat = self.features[nearest_idx]
 
@@ -660,21 +783,21 @@ class QDAnalysisApp:
 
     def add_manual_feature(self, x: float, y: float) -> None:
         if self.features:
-            radius = float(np.median([f["r"] for f in self.features]))
+            radius = float(np.median([blob.radius for blob in self.features]))
         else:
             radius = 5.0
 
         area = float(np.pi * radius**2)
 
-        self.features.append(
-            {
-                "cx": x,
-                "cy": y,
-                "r": radius,
-                "area": area,
-                "circularity": 1.0,
-            }
+        blob = Blob(
+            cx=x,
+            cy=y,
+            radius=radius,
+            area=area,
+            circularity=1.0,
         )
+        blob.calculate_height_parameters(self.raw_image)
+        self.features.append(blob)
 
         rr, cc = draw_disk((y, x), radius, shape=self.binary_mask.shape)
         self.binary_mask[rr, cc] = 1
@@ -701,7 +824,7 @@ class QDAnalysisApp:
 
         np.save(f"{save_path_base}_mask.npy", self.binary_mask)
 
-        df = pd.DataFrame(self.features)
+        df = pd.DataFrame([blob.to_dict() for blob in self.features])
         df.to_csv(f"{save_path_base}_features.csv", index=False)
 
         print(f"Successfully exported:", flush=True)
