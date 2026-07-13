@@ -41,6 +41,7 @@ data_numpy/
 data_processed/
 aligned_data/
 results/
+raw/
 
 # ==========================
 # Generated / analysis outputs
