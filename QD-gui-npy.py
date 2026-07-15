@@ -662,8 +662,8 @@ class QDAnalysisApp:
         info.pack(fill=tk.X, padx=18, pady=(16, 8))
 
         values = [
-            ("Centre x", f'{float(blob.cx):.2f} px'),
-            ("Centre y", f'{float(blob.cy):.2f} px'),
+            # ("Centre x", f'{float(blob.cx):.2f} px'),
+            # ("Centre y", f'{float(blob.cy):.2f} px'),
             ("Radius", f'{float(blob.radius):.2f} px'),
             ("Area", f'{float(blob.area):.2f} px²'),
             ("Circularity", f'{float(blob.circularity):.3f}'),
