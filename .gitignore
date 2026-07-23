@@ -36,13 +36,10 @@ __pycache__/
 *.gwy
 
 # Only ignore large TIFF/PNG from AFM processing
-data_gwy/
-data_numpy/
-data_processed/
-aligned_data/
-results/
-raw/
-Uncapped InGaN QDs_different miscut/
+Data-Conversion/Data-Display/
+Data-Conversion/SPM/
+Data-Conversion/GWY/
+Data-Conversion/NPY/
 
 # ==========================
 # Generated / analysis outputs

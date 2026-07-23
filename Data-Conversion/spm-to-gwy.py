@@ -10,19 +10,20 @@ import gwyfile
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
+SPM_DIR = PROJECT_DIR / "SPM"
+RESULTS_DIR = PROJECT_DIR / "Data-DISPLAY"
 
 RAW_FOLDERS = [
-    PROJECT_DIR / "1nm QD AFMs",
-    PROJECT_DIR / "2nm QD AFMs",
-    PROJECT_DIR / "3nm QD AFMs",
+    SPM_DIR / "1nm QD AFMs",
+    SPM_DIR / "2nm QD AFMs",
+    SPM_DIR / "3nm QD AFMs",
+    SPM_DIR / "raw",
+    SPM_DIR / "Uncapped InGaN QDs_different miscut",
+    SPM_DIR / "Ground-Truth-SPM",
 ]
 
-GWY_DIR = PROJECT_DIR / "data_gwy"
-RESULTS_DIR = PROJECT_DIR / "results"
-
-GWY_DIR.mkdir(exist_ok=True)
-RESULTS_DIR.mkdir(exist_ok=True)
-
+GWY_DIR = PROJECT_DIR / "GWY"
+GWY_DIR.mkdir(parents=True, exist_ok=True)
 
 def find_gwyddion_command() -> str:
     """

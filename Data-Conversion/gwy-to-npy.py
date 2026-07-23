@@ -9,8 +9,8 @@ import gwyfile
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
-GWY_DIR = PROJECT_DIR / "data_gwy"
-NPY_DIR = PROJECT_DIR / "data_numpy"
+GWY_DIR = PROJECT_DIR / "GWY"
+NPY_DIR = PROJECT_DIR / "NPY"
 
 NPY_DIR.mkdir(exist_ok=True)
 
