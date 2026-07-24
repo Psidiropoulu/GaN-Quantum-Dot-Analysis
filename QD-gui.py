@@ -60,21 +60,265 @@ def percentile_limits(z: np.ndarray, low: float = 1, high: float = 99) -> tuple[
     return float(vmin), float(vmax)
 
 
+
+# ==========================================================
+# Preprocessing functions
+# ==========================================================
+
+def mad(values: np.ndarray) -> float:
+    """Median absolute deviation, scaled like a standard deviation."""
+    values = np.asarray(values, dtype=float)
+    centre = np.nanmedian(values)
+    return float(1.4826 * np.nanmedian(np.abs(values - centre)))
+
+
+def subtract_global_plane(
+    z: np.ndarray,
+    n_iterations: int = 6,
+    sigma: float = 2.5,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Robustly fit and subtract z = ax + by + c."""
+    z = np.asarray(z, dtype=float)
+    ny, nx = z.shape
+    yy, xx = np.indices(z.shape)
+
+    finite = np.isfinite(z)
+    if np.count_nonzero(finite) < 3:
+        raise ValueError("Not enough finite pixels for plane fitting.")
+
+    mask = finite.copy()
+    design = np.column_stack(
+        (xx[finite], yy[finite], np.ones(np.count_nonzero(finite)))
+    )
+    values = z[finite]
+    coefficients = np.zeros(3, dtype=float)
+
+    for _ in range(n_iterations):
+        fit_mask = mask[finite]
+        if np.count_nonzero(fit_mask) < 3:
+            break
+
+        coefficients, *_ = np.linalg.lstsq(
+            design[fit_mask], values[fit_mask], rcond=None
+        )
+        plane = coefficients[0] * xx + coefficients[1] * yy + coefficients[2]
+        residual = z - plane
+        scale = mad(residual[mask])
+
+        if not np.isfinite(scale) or scale == 0:
+            break
+
+        centre = np.nanmedian(residual[mask])
+        mask = finite & (np.abs(residual - centre) < sigma * scale)
+
+    plane = coefficients[0] * xx + coefficients[1] * yy + coefficients[2]
+    return z - plane, plane, mask
+
+
+def robust_polynomial_line_flatten(
+    z: np.ndarray,
+    degree: int = 1,
+    n_iterations: int = 6,
+    sigma: float = 2.5,
+    axis: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Robustly flatten each row (axis=1) or column (axis=0)."""
+    z = np.asarray(z, dtype=float)
+
+    if axis == 0:
+        working = z.T.copy()
+    elif axis == 1:
+        working = z.copy()
+    else:
+        raise ValueError("axis must be 0 or 1")
+
+    result = np.full_like(working, np.nan)
+    backgrounds = np.full_like(working, np.nan)
+    n_lines, n_points = working.shape
+    x = np.linspace(-1.0, 1.0, n_points)
+
+    for row_index in range(n_lines):
+        line = working[row_index]
+        finite = np.isfinite(line)
+
+        if np.count_nonzero(finite) <= degree + 1:
+            result[row_index] = line
+            continue
+
+        fit_mask = finite.copy()
+        coefficients = np.zeros(degree + 1, dtype=float)
+
+        for _ in range(n_iterations):
+            if np.count_nonzero(fit_mask) <= degree + 1:
+                break
+
+            coefficients = np.polyfit(x[fit_mask], line[fit_mask], degree)
+            background = np.polyval(coefficients, x)
+            residual = line - background
+            centre = np.nanmedian(residual[fit_mask])
+            scale = mad(residual[fit_mask])
+
+            if not np.isfinite(scale) or scale == 0:
+                break
+
+            fit_mask = finite & (np.abs(residual - centre) < sigma * scale)
+
+        if np.count_nonzero(fit_mask) <= degree + 1:
+            fit_mask = finite
+
+        coefficients = np.polyfit(x[fit_mask], line[fit_mask], degree)
+        background = np.polyval(coefficients, x)
+        result[row_index] = line - background
+        backgrounds[row_index] = background
+
+    if axis == 0:
+        return result.T, backgrounds.T
+    return result, backgrounds
+
+
+def align_scanline_offsets(
+    z: np.ndarray,
+    smoothing_window: int = 21,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Remove rapid row-to-row offsets while preserving slow variation."""
+    z = np.asarray(z, dtype=float)
+
+    if smoothing_window % 2 == 0:
+        smoothing_window += 1
+
+    row_offsets = np.nanmedian(z, axis=1)
+    valid = np.isfinite(row_offsets)
+    filled = row_offsets.copy()
+
+    if not np.any(valid):
+        return z.copy(), np.zeros(z.shape[0], dtype=float)
+
+    if not np.all(valid):
+        row_numbers = np.arange(len(row_offsets))
+        filled[~valid] = np.interp(
+            row_numbers[~valid], row_numbers[valid], row_offsets[valid]
+        )
+
+    smooth_offsets = ndimage.median_filter(
+        filled, size=smoothing_window, mode="nearest"
+    )
+    rapid_offset_error = filled - smooth_offsets
+    corrected = z - rapid_offset_error[:, None]
+    return corrected, rapid_offset_error
+
+
+def robust_2d_background(
+    image: np.ndarray,
+    sigma_y: float = 30,
+    sigma_x: float = 60,
+    iterations: int = 8,
+    threshold: float = 2.5,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Estimate and subtract a smooth 2D background robustly."""
+    image = np.asarray(image, dtype=float)
+    finite = np.isfinite(image)
+
+    if not np.any(finite):
+        raise ValueError("Image contains no finite pixels.")
+
+    filled = image.copy()
+    filled[~finite] = np.nanmedian(image[finite])
+    background = ndimage.gaussian_filter(
+        filled, sigma=(sigma_y, sigma_x), mode="reflect"
+    )
+    mask = finite.copy()
+
+    for _ in range(iterations):
+        residual = image - background
+        centre = np.nanmedian(residual[mask])
+        scale = mad(residual[mask])
+
+        if not np.isfinite(scale) or scale == 0:
+            break
+
+        mask = finite & (np.abs(residual - centre) < threshold * scale)
+        weighted_values = np.where(mask, image, 0.0)
+        weights = mask.astype(float)
+        smooth_values = ndimage.gaussian_filter(
+            weighted_values, sigma=(sigma_y, sigma_x), mode="reflect"
+        )
+        smooth_weights = ndimage.gaussian_filter(
+            weights, sigma=(sigma_y, sigma_x), mode="reflect"
+        )
+        background = smooth_values / np.maximum(smooth_weights, 1e-12)
+
+    return image - background, background, mask
+
+
+def remove_partial_horizontal_stripes(
+    image: np.ndarray,
+    sigma_x: float = 35,
+    sigma_y_small: float = 1.0,
+    sigma_y_large: float = 12.0,
+    strength: float = 0.75,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Estimate and partially subtract horizontally elongated stripe artefacts."""
+    image = np.asarray(image, dtype=float)
+    finite = np.isfinite(image)
+
+    if not np.any(finite):
+        raise ValueError("Image contains no finite pixels.")
+
+    filled = image.copy()
+    filled[~finite] = np.nanmedian(image[finite])
+    pre = ndimage.gaussian_filter(filled, sigma=(0.6, 0.6), mode="reflect")
+    horiz_small_y = ndimage.gaussian_filter(
+        pre, sigma=(sigma_y_small, sigma_x), mode="reflect"
+    )
+    horiz_large_y = ndimage.gaussian_filter(
+        pre, sigma=(sigma_y_large, sigma_x), mode="reflect"
+    )
+    stripe_map = horiz_small_y - horiz_large_y
+    corrected = filled - strength * stripe_map
+    corrected[~finite] = np.nan
+    stripe_map[~finite] = np.nan
+    return corrected, stripe_map
+
+
+# ==========================================================
+# Generic algorithm placeholders
+# ==========================================================
+
+def algorithm_1(app: "QDAnalysisApp") -> None:
+    """Placeholder algorithm 1. Replace this body with your own algorithm."""
+    print("Running Algorithm 1 (current top-hat + LoG pipeline).", flush=True)
+    app.reset_detection_cache()
+    app.run_pipeline()
+
+
+def algorithm_2(app: "QDAnalysisApp") -> None:
+    """Placeholder algorithm 2. Replace this body with your own algorithm."""
+    print("Running Algorithm 2 placeholder.", flush=True)
+    app.reset_detection_cache()
+    app.run_pipeline()
+
+
+def algorithm_3(app: "QDAnalysisApp") -> None:
+    """Placeholder algorithm 3. Replace this body with your own algorithm."""
+    print("Running Algorithm 3 placeholder.", flush=True)
+    app.reset_detection_cache()
+    app.run_pipeline()
+
+
+ALGORITHM_FUNCTIONS = {
+    "Algorithm 1": algorithm_1,
+    "Algorithm 2": algorithm_2,
+    "Algorithm 3": algorithm_3,
+}
+
+
 # ==========================================================
 # Blob model
 # ==========================================================
 
 @dataclass
 class Blob:
-    """
-    Represents one detected quantum dot.
-
-    The Blob owns:
-    - its position and geometry;
-    - its calculated AFM height measurements;
-    - any manually entered notes;
-    - conversion to a dictionary for CSV export.
-    """
+    """Represents one detected quantum dot."""
 
     cx: float
     cy: float
@@ -98,50 +342,44 @@ class Blob:
         background_inner_scale: float = 1.5,
         background_outer_scale: float = 2.5,
     ) -> None:
-
         rows, cols = np.indices(image.shape)
+        distance_squared = (cols - self.cx) ** 2 + (rows - self.cy) ** 2
 
-        distance_squared = (
-            (cols - self.cx) ** 2
-            + (rows - self.cy) ** 2
-        )
-
-        # Pixels belonging to the detected dot
         dot_mask = distance_squared <= self.radius**2
-
-        # Pixels in a ring around the dot
         inner_radius = background_inner_scale * self.radius
         outer_radius = background_outer_scale * self.radius
-
         background_mask = (
             (distance_squared >= inner_radius**2)
             & (distance_squared <= outer_radius**2)
+            & np.isfinite(image)
         )
 
-        dot_pixels = image[dot_mask]
+        dot_pixels = image[dot_mask & np.isfinite(image)]
         background_pixels = image[background_mask]
 
+        if dot_pixels.size == 0 or background_pixels.size == 0:
+            self.dot_height = np.nan
+            self.background_height = np.nan
+            self.relative_height = np.nan
+            return
+
         self.dot_height = float(np.max(dot_pixels))
-        self.background_height = float(np.mean(background_pixels))
+        self.background_height = float(np.median(background_pixels))
+        self.relative_height = self.dot_height - self.background_height
 
-        self.relative_height = (
-            self.dot_height
-            - self.background_height
-        )
-
-        def to_dict(self) -> dict[str, object]:
-            """Return all blob data in a CSV-friendly dictionary."""
-            return {
-                "cx": self.cx,
-                "cy": self.cy,
-                "r": self.radius,
-                "area": self.area,
-                "circularity": self.circularity,
-                "blob.dot_height": self.dot_height,
-                "blob.background_height": self.background_height,
-                "blob.relative_height": self.relative_height,
-                "notes": self.notes,
-            }
+    def to_dict(self) -> dict[str, object]:
+        """Return all blob data in a CSV-friendly dictionary."""
+        return {
+            "cx": self.cx,
+            "cy": self.cy,
+            "r": self.radius,
+            "area": self.area,
+            "circularity": self.circularity,
+            "blob.dot_height": self.dot_height,
+            "blob.background_height": self.background_height,
+            "blob.relative_height": self.relative_height,
+            "notes": self.notes,
+        }
 
 
 # ==========================================================
@@ -172,6 +410,8 @@ class QDAnalysisApp:
         self.sliders_active = True
         self.show_labels = True
         self._needs_otsu = False
+        self.preprocessing_history: list[str] = []
+        self.selected_algorithm = tk.StringVar(value="Algorithm 1")
 
         # Independent popup windows, keyed by feature index.
         # Multiple blob windows can remain open simultaneously.
@@ -192,7 +432,26 @@ class QDAnalysisApp:
         toolbar = tk.Frame(self.root, bd=1, relief=tk.RAISED)
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        tk.Button(toolbar, text="Load .NPY", command=self.load_file_dialog).pack(side=tk.LEFT, padx=5, pady=5)
+        tk.Button(toolbar, text="Load .NPY", command=self.load_file_dialog).pack(side=tk.LEFT, padx=4, pady=5)
+
+        tk.Button(toolbar, text="Reset Raw", command=self.reset_to_raw).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Button(toolbar, text="Remove Plane", command=self.apply_global_plane).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Button(toolbar, text="Line Flatten", command=self.apply_line_flatten).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Button(toolbar, text="Align Rows", command=self.apply_row_alignment).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Button(toolbar, text="2D Background", command=self.apply_2d_background).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Button(toolbar, text="Destripe", command=self.apply_horizontal_destripe).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Button(toolbar, text="Standard", command=self.apply_standard_preprocessing).pack(side=tk.LEFT, padx=2, pady=5)
+
+        ttk.Label(toolbar, text="Algorithm:").pack(side=tk.LEFT, padx=(10, 3), pady=5)
+        self.algorithm_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self.selected_algorithm,
+            values=list(ALGORITHM_FUNCTIONS),
+            state="readonly",
+            width=12,
+        )
+        self.algorithm_combo.pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Button(toolbar, text="Run", command=self.run_selected_algorithm).pack(side=tk.LEFT, padx=3, pady=5)
 
         tk.Button(toolbar, text="Exit Edit Mode", command=self.clear_mode).pack(side=tk.LEFT, padx=5, pady=5)
         tk.Button(toolbar, text="Toggle Labels", command=self.toggle_labels).pack(side=tk.LEFT, padx=5, pady=5)
@@ -322,16 +581,13 @@ class QDAnalysisApp:
 
         path = Path(path)
 
-        # If selected file is already in the scanned list, use its index.
-        if path in self.npy_files:
-            idx = self.npy_files.index(path)
-            self.load_npy_by_index(idx)
-        else:
-            self.load_npy_file(path)
+        self.load_npy_file(path)
 
     def load_npy_by_index(self, idx: int) -> None:
+        if not self.npy_files:
+            return
+        idx = max(0, min(idx, len(self.npy_files) - 1))
         self.current_file_index = idx
-        self.file_combo.current(idx)
         self.load_npy_file(self.npy_files[idx])
 
     def load_npy_file(self, path: str | Path) -> None:
@@ -344,7 +600,8 @@ class QDAnalysisApp:
 
             self.filepath = str(path)
             self.raw_image = z
-            self.corrected_image = z
+            self.corrected_image = z.copy()
+            self.preprocessing_history = []
 
             print("Loaded .npy array", flush=True)
             print("Shape:", z.shape, flush=True)
@@ -376,6 +633,133 @@ class QDAnalysisApp:
         self.last_area_lower = None
 
 
+
+    def reset_detection_cache(self) -> None:
+        """Invalidate cached detection stages without changing the image."""
+        self.close_all_blob_windows()
+        self.tophat_image = None
+        self.log_image = None
+        self.raw_mask = None
+        self.binary_mask = None
+        self.features = []
+        self.last_r_th = None
+        self.last_sigma = None
+        self.last_thresh = None
+        self.last_circ = None
+        self.last_area_upper = None
+        self.last_area_lower = None
+        self._needs_otsu = True
+
+    def _set_processed_image(self, image: np.ndarray, step_name: str) -> None:
+        """Store a preprocessing result and rerun the selected detector."""
+        image = np.asarray(image, dtype=np.float32)
+        finite = np.isfinite(image)
+        if not np.any(finite):
+            raise ValueError("Preprocessing produced no finite pixels.")
+
+        image = image - np.nanmedian(image[finite])
+        self.corrected_image = image
+        self.preprocessing_history.append(step_name)
+        self.reset_detection_cache()
+        self.run_selected_algorithm()
+
+    def reset_to_raw(self) -> None:
+        if self.raw_image is None:
+            return
+        self.corrected_image = self.raw_image.copy()
+        self.preprocessing_history = []
+        self.reset_detection_cache()
+        self.run_selected_algorithm()
+
+    def apply_global_plane(self) -> None:
+        if self.corrected_image is None:
+            return
+        corrected, _plane, _mask = subtract_global_plane(self.corrected_image)
+        self._set_processed_image(corrected, "global plane")
+
+    def apply_line_flatten(self) -> None:
+        if self.corrected_image is None:
+            return
+        corrected, _background = robust_polynomial_line_flatten(
+            self.corrected_image, degree=1, n_iterations=6, sigma=2.5, axis=1
+        )
+        self._set_processed_image(corrected, "line flatten")
+
+    def apply_row_alignment(self) -> None:
+        if self.corrected_image is None:
+            return
+        corrected, _offsets = align_scanline_offsets(
+            self.corrected_image, smoothing_window=21
+        )
+        self._set_processed_image(corrected, "row alignment")
+
+    def apply_2d_background(self) -> None:
+        if self.corrected_image is None:
+            return
+        corrected, _background, _mask = robust_2d_background(
+            self.corrected_image,
+            sigma_y=30,
+            sigma_x=60,
+            iterations=8,
+            threshold=2.5,
+        )
+        self._set_processed_image(corrected, "2D background")
+
+    def apply_horizontal_destripe(self) -> None:
+        if self.corrected_image is None:
+            return
+        corrected, _stripe_map = remove_partial_horizontal_stripes(
+            self.corrected_image,
+            sigma_x=35,
+            sigma_y_small=1.0,
+            sigma_y_large=12.0,
+            strength=0.75,
+        )
+        self._set_processed_image(corrected, "horizontal destripe")
+
+    def apply_standard_preprocessing(self) -> None:
+        """Start from raw and apply plane, 2D background, and destriping."""
+        if self.raw_image is None:
+            return
+
+        image, _plane, _plane_mask = subtract_global_plane(
+            self.raw_image, n_iterations=6, sigma=2.5
+        )
+        image, _background, _background_mask = robust_2d_background(
+            image,
+            sigma_y=30,
+            sigma_x=60,
+            iterations=8,
+            threshold=2.5,
+        )
+        image, _stripe_map = remove_partial_horizontal_stripes(
+            image,
+            sigma_x=35,
+            sigma_y_small=1.0,
+            sigma_y_large=12.0,
+            strength=0.75,
+        )
+
+        self.preprocessing_history = []
+        self._set_processed_image(image, "standard sequence")
+
+    def run_selected_algorithm(self) -> None:
+        """Dispatch to the function selected in the algorithm combobox."""
+        if self.corrected_image is None:
+            return
+
+        algorithm_name = self.selected_algorithm.get()
+        function = ALGORITHM_FUNCTIONS.get(algorithm_name)
+
+        if function is None:
+            raise ValueError(f"Unknown algorithm: {algorithm_name}")
+
+        try:
+            function(self)
+        except Exception:
+            print(f"{algorithm_name} failed:", flush=True)
+            traceback.print_exc()
+            self.status_label.configure(text=f"{algorithm_name} failed. Check terminal.")
 
     def run_pipeline(self, *args) -> None:
         if self.corrected_image is None or not self.sliders_active:
@@ -527,6 +911,8 @@ class QDAnalysisApp:
                 f"File: {file_label}\n"
                 f"Shape: {self.corrected_image.shape}\n"
                 f"Features: {len(self.features)}\n"
+                f"Algorithm: {self.selected_algorithm.get()}\n"
+                f"Preprocessing: {', '.join(self.preprocessing_history) or 'none'}\n"
                 f"Mode: {self.edit_mode or 'normal'}"
             )
         )
@@ -771,12 +1157,12 @@ class QDAnalysisApp:
         nearest_idx, dist = min(distances, key=lambda item: item[1])
         nearest_feat = self.features[nearest_idx]
 
-        if dist <= nearest_feat["r"] + 5:
+        if dist <= nearest_feat.radius + 5:
             removed = self.features.pop(nearest_idx)
 
             rr, cc = draw_disk(
-                (removed["cy"], removed["cx"]),
-                removed["r"] + 1,
+                (removed.cy, removed.cx),
+                removed.radius + 1,
                 shape=self.binary_mask.shape,
             )
             self.binary_mask[rr, cc] = 0
@@ -838,3 +1224,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = QDAnalysisApp(root)
     root.mainloop()
+
