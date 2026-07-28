@@ -14,6 +14,16 @@ def mad(values):
         np.abs(values - centre)
     )
 
+def robust_normalise(z):
+    median = np.nanmedian(z)
+    mad = np.nanmedian(np.abs(z - median))
+    scale = 1.4826 * mad
+
+    if not np.isfinite(scale) or scale == 0:
+        scale = np.nanstd(z)
+
+    return (z - median) / scale
+
 
 def subtract_global_plane(
     z,
