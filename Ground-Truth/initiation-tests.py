@@ -4,6 +4,8 @@ from skimage.measure import label
 
 ground_truth_root = "Ground-Truth/NPY-Ground-Truth"
 
+
+# tests at the start of the project to check if there is actually any data loaded to the ground truth dataset
 for scan_name in ["Scan1", "Scan2", "Scan3"]:
 
     scan_folder = os.path.join(ground_truth_root, scan_name)

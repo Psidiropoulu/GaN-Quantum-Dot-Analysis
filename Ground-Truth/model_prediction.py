@@ -11,7 +11,6 @@ from skimage.morphology import remove_small_objects
 
 
 # IMPORT PROJECT PREPROCESSING
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -26,6 +25,10 @@ model = tf.keras.models.load_model("Ground-Truth/qd_unet_fold1.keras", compile=F
 scan_folder = "Ground-Truth/NPY-Ground-Truth/Scan3"
 image = np.load(os.path.join(scan_folder, "channel_00___0_data.npy"))
 Y_test = np.load(os.path.join(scan_folder, "channel_00___0_data_mask.npy"))
+labelled_ground_truth = label(Y_test, connectivity=2)
+ground_truth_regions = regionprops(labelled_ground_truth)
+number_of_ground_truth_qds = len(ground_truth_regions)
+print("Ground-truth QDs:", number_of_ground_truth_qds)
 
 
 # PREPROCESS EXACTLY LIKE TRAINING
@@ -61,7 +64,7 @@ def predict_full_scan(model, image, patch_size=128):
 
 
 prediction = predict_full_scan(model, X_test, patch_size=128,)
-predicted_mask = prediction >= 0.4
+predicted_mask = prediction >= 0.1
 
 
 # REMOVE TINY OBJECTS
@@ -75,7 +78,6 @@ clean_mask = remove_small_objects(
 labelled_prediction = label(clean_mask, connectivity=2)
 regions = regionprops(labelled_prediction)
 number_of_qds = len(regions)
-print("Predicted QDs after filtering:", number_of_qds)
 
 
 # PLOT RESULTS
@@ -85,7 +87,7 @@ axes[0].imshow(X_test, cmap="gray")
 axes[0].set_title("Unseen AFM scan")
 
 axes[1].imshow(Y_test, cmap="gray")
-axes[1].set_title("Ground truth")
+axes[1].set_title(f"Ground truth: {number_of_ground_truth_qds} QDs")
 
 im = axes[2].imshow(prediction, cmap="viridis", vmin=0, vmax=1)
 axes[2].set_title("Predicted QD probability")
@@ -99,3 +101,62 @@ for ax in axes:
 
 plt.tight_layout()
 plt.show()
+
+
+# COMPARE GROUND TRUTH AND PREDICTED MASK
+
+ground_truth_flat = Y_test.astype(np.float32).ravel()
+predicted_flat = clean_mask.astype(np.float32).ravel()
+
+correlation = np.corrcoef(
+    ground_truth_flat,
+    predicted_flat,
+)[0, 1]
+
+intersection = np.logical_and(
+    Y_test,
+    clean_mask,
+).sum()
+
+union = np.logical_or(
+    Y_test,
+    clean_mask,
+).sum()
+
+dice = (
+    2 * intersection
+    / (Y_test.sum() + clean_mask.sum())
+)
+
+iou = intersection / union
+
+print("Pixelwise correlation:", correlation)
+print("Dice coefficient:", dice)
+print("IoU:", iou)
+
+probability_correlation = np.corrcoef(
+    Y_test.astype(np.float32).ravel(),
+    prediction.astype(np.float32).ravel(),
+)[0, 1]
+
+print(
+    "Ground truth vs probability-map correlation:",
+    probability_correlation,
+)
+
+thresholds = np.arange(0.1, 0.91, 0.05)
+
+for threshold in thresholds:
+    mask = prediction >= threshold
+
+    intersection = np.logical_and(Y_test, mask).sum()
+    union = np.logical_or(Y_test, mask).sum()
+
+    dice = 2 * intersection / (Y_test.sum() + mask.sum())
+    iou = intersection / union
+
+    print(
+        f"threshold={threshold:.2f}  "
+        f"dice={dice:.3f}  "
+        f"iou={iou:.3f}"
+    )
