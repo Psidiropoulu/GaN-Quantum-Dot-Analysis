@@ -108,26 +108,10 @@ plt.show()
 ground_truth_flat = Y_test.astype(np.float32).ravel()
 predicted_flat = clean_mask.astype(np.float32).ravel()
 
-correlation = np.corrcoef(
-    ground_truth_flat,
-    predicted_flat,
-)[0, 1]
-
-intersection = np.logical_and(
-    Y_test,
-    clean_mask,
-).sum()
-
-union = np.logical_or(
-    Y_test,
-    clean_mask,
-).sum()
-
-dice = (
-    2 * intersection
-    / (Y_test.sum() + clean_mask.sum())
-)
-
+correlation = np.corrcoef(ground_truth_flat, predicted_flat)[0, 1]
+intersection = np.logical_and(Y_test, clean_mask,).sum()
+union = np.logical_or(Y_test,clean_mask,).sum()
+dice = (2*intersection) / (Y_test.sum() + clean_mask.sum())
 iou = intersection / union
 
 print("Pixelwise correlation:", correlation)

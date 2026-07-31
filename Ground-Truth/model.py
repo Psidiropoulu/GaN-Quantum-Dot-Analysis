@@ -100,9 +100,9 @@ def augment_dataset(X, Y):
             (image, mask,),
             (np.rot90(image, 1), np.rot90(mask, 1),),
             (np.rot90(image, 2), np.rot90(mask, 2),),
-            (np.rot90(image, 3),np.rot90(mask, 3),),
-            (np.fliplr(image),np.fliplr(mask),),
-            (np.flipud(image),np.flipud(mask),),
+            (np.rot90(image, 3), np.rot90(mask, 3),),
+            (np.fliplr(image), np.fliplr(mask),),
+            (np.flipud(image), np.flipud(mask),),
         ]
 
         for image_aug, mask_aug in variants:
@@ -137,8 +137,6 @@ Y_train = np.concatenate(Y_train, axis=0,)
 
 # AUGMENT TRAINING DATA
 X_train_aug, Y_train_aug = augment_dataset(X_train, Y_train,)
-
-
 
 
 
@@ -224,10 +222,8 @@ def build_unet(input_shape=(128, 128, 1)):
 model = build_unet()
 model.summary()
 
-# ============================================================
-# LOSS + METRICS
-# ============================================================
 
+# LOSS + METRICS
 def dice_coefficient(y_true, y_pred, smooth=1e-6):
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred, tf.float32)
