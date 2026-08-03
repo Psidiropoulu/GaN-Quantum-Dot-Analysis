@@ -419,3 +419,11 @@ def preprocess_afm(
     stages["final"] = result.copy()
 
     return result, stages
+
+
+def fft_bandpass_filter(image, low_sigma=5, high_sigma=40,):
+    image = np.asarray(image, dtype=float)
+    small_scale = gaussian_filter(image, sigma=low_sigma,)
+    large_scale = gaussian_filter(image, sigma=high_sigma,)
+    filtered = small_scale - large_scale
+    return filtered
