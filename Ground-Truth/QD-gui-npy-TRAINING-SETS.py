@@ -20,7 +20,7 @@ from skimage.filters import threshold_otsu
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_NPY_DIR = PROJECT_DIR / "data_numpy"
+DEFAULT_NPY_DIR = PROJECT_DIR / "Data-Conversion/NPY"
 
 # Physical QD acceptance requirement:
 # 6 Å = 0.6 nm = 6e-10 m.
@@ -406,8 +406,10 @@ class AFMSegmentationApp:
         self.raw_mask: np.ndarray | None = None
         self.binary_mask: np.ndarray | None = None
 
-        # Each feature is a dict: cx, cy, r, area, circularity
-        self.features: list[dict[str, float]] = []
+        # Each feature stores its measurements and exact mask coordinates.
+        self.features: list[dict] = []
+        self.false_positives: list[dict] = []
+        self.false_negatives: list[dict] = []
 
         self.edit_mode: str | None = None  # 'FP', 'FN', or None
         self.sliders_active = True
@@ -501,10 +503,11 @@ class AFMSegmentationApp:
         plot_frame = tk.Frame(main_pane)
         main_pane.add(plot_frame)
 
-        self.fig, self.axs = plt.subplots(2, 2, figsize=(10, 10))
+        self.fig, self.axs = plt.subplots(1, 2, figsize=(12, 6))
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
         self.fig.canvas.mpl_connect("button_press_event", self.on_canvas_click)
+        self.fig.canvas.mpl_connect("motion_notify_event", self.on_canvas_hover)
         self.fig.tight_layout()
 
         self.update_empty_plots()
@@ -646,6 +649,8 @@ class AFMSegmentationApp:
         self.raw_mask = None
         self.binary_mask = None
         self.features = []
+        self.false_positives = []
+        self.false_negatives = []
 
         self.last_r_th = None
         self.last_sigma = None
@@ -854,27 +859,29 @@ class AFMSegmentationApp:
                     ):
                         continue
 
-                    self.features.append(
-                        {
-                            "cx": measurement["peak_x"],
-                            "cy": measurement["peak_y"],
-                            "r": radius,
-                            "area": float(prop.area),
-                            "circularity": circularity,
-                            "peak_value_m": measurement["peak_value_m"],
-                            "local_background_m": measurement["local_background_m"],
-                            "local_height_m": measurement["local_height_m"],
-                            "local_height_nm": measurement["local_height_nm"],
-                            "local_height_A": measurement["local_height_A"],
-                            "background_inner_radius_px": measurement["background_inner_radius_px"],
-                            "background_outer_radius_px": measurement["background_outer_radius_px"],
-                            "background_pixel_count": measurement["background_pixel_count"],
-                        }
-                    )
+                    feature = {
+                        "cx": measurement["peak_x"],
+                        "cy": measurement["peak_y"],
+                        "r": radius,
+                        "area": float(prop.area),
+                        "circularity": circularity,
+                        "peak_value_m": measurement["peak_value_m"],
+                        "local_background_m": measurement["local_background_m"],
+                        "local_height_m": measurement["local_height_m"],
+                        "local_height_nm": measurement["local_height_nm"],
+                        "local_height_A": measurement["local_height_A"],
+                        "background_inner_radius_px": measurement["background_inner_radius_px"],
+                        "background_outer_radius_px": measurement["background_outer_radius_px"],
+                        "background_pixel_count": measurement["background_pixel_count"],
+                        "manual_status": "automatic",
+                        "mask_coords": prop.coords.copy(),
+                    }
 
+                    self.features.append(feature)
                     self.binary_mask[prop.coords[:, 0], prop.coords[:, 1]] = 1
 
         self.update_plots()
+        
 
 
 
@@ -898,13 +905,17 @@ class AFMSegmentationApp:
         z_vmin, z_vmax = percentile_limits(self.corrected_image, 1, 99)
 
         # Plot 1: original working AFM image + circles
-        self.axs[0, 0].imshow(self.corrected_image, cmap="afmhot", vmin=z_vmin, vmax=z_vmax)
-        self.axs[0, 0].set_title(f"AFM image | QDs ≥ 6 Å: {len(self.features)}")
+        self.axs[0].imshow(self.corrected_image, cmap="afmhot", vmin=z_vmin, vmax=z_vmax)
+        self.axs[0].set_title(f"AFM image | QDs ≥ 6 Å: {len(self.features)}")
 
         if self.show_labels:
             for f in self.features:
                 circle = plt.Circle((f["cx"], f["cy"]), f["r"] + 2, color="cyan", fill=False, lw=1.0)
-                self.axs[0, 0].add_patch(circle)
+                self.axs[0].add_patch(circle)
+
+        """
+
+        I FELT LIKE WE DIDN'T NEED TO SEE THE TOP-HAT AND LOG RESPONSE PLOTS, SO I COMMENTED THEM OUT.....
 
         # Plot 2: top-hat image
         if self.tophat_image is not None:
@@ -916,11 +927,12 @@ class AFMSegmentationApp:
         if self.log_image is not None:
             self.axs[1, 0].imshow(self.log_image, cmap="gray", vmin=0, vmax=1)
         self.axs[1, 0].set_title("Top-hat + LoG response")
+        """
 
         # Plot 4: final binary mask
         if self.binary_mask is not None:
-            self.axs[1, 1].imshow(self.binary_mask, cmap="gray", vmin=0, vmax=1)
-        self.axs[1, 1].set_title("Final binary mask")
+            self.axs[1].imshow(self.binary_mask, cmap="gray", vmin=0, vmax=1)
+        self.axs[1].set_title("Final binary mask")
 
         if self.filepath:
             file_label = Path(self.filepath).name
@@ -936,6 +948,21 @@ class AFMSegmentationApp:
                 f"Mode: {self.edit_mode or 'normal'}"
             )
         )
+
+        self.hover_annotations = {}
+
+        for ax in (self.axs[0], self.axs[1]):
+            annotation = ax.annotate(
+                "",
+                xy=(0, 0),
+                xytext=(12, 12),
+                textcoords="offset points",
+                fontsize=4,
+                bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.9},
+                arrowprops={"arrowstyle": "->"},
+                visible=False,
+            )
+            self.hover_annotations[ax] = annotation
 
         self.fig.tight_layout()
         self.canvas.draw_idle()
@@ -985,7 +1012,7 @@ class AFMSegmentationApp:
         if self.binary_mask is None or self.corrected_image is None:
             return
 
-        if not self.edit_mode or event.inaxes not in [self.axs[0, 0], self.axs[1, 1]]:
+        if not self.edit_mode or event.inaxes not in [self.axs[0], self.axs[1]]:
             return
 
         if event.xdata is None or event.ydata is None:
@@ -1001,31 +1028,98 @@ class AFMSegmentationApp:
 
         self.update_plots()
 
+    def on_canvas_hover(self, event) -> None:
+        if not hasattr(self, "hover_annotations"):
+            return
+
+        valid_axes = (self.axs[0], self.axs[1])
+
+        if event.inaxes not in valid_axes or event.xdata is None or event.ydata is None:
+            changed = False
+
+            for annotation in self.hover_annotations.values():
+                if annotation.get_visible():
+                    annotation.set_visible(False)
+                    changed = True
+
+            if changed:
+                self.canvas.draw_idle()
+
+            return
+
+        if not self.features:
+            return
+
+        mouse_x = float(event.xdata)
+        mouse_y = float(event.ydata)
+
+        distances = [
+            np.hypot(feature["cx"] - mouse_x, feature["cy"] - mouse_y)
+            for feature in self.features
+        ]
+
+        nearest_index = int(np.argmin(distances))
+        nearest_feature = self.features[nearest_index]
+        nearest_distance = distances[nearest_index]
+
+        hover_distance = nearest_feature["r"] + 3
+
+        for ax, annotation in self.hover_annotations.items():
+            annotation.set_visible(False)
+
+        if nearest_distance > hover_distance:
+            self.canvas.draw_idle()
+            return
+
+        annotation = self.hover_annotations[event.inaxes]
+        annotation.xy = (nearest_feature["cx"], nearest_feature["cy"])
+
+        annotation.set_text(
+            f"Height: {nearest_feature['local_height_A']:.2f} Å\n"
+            f"Radius: {nearest_feature['r']:.2f} px\n"
+            f"Area: {nearest_feature['area']:.1f} px²\n"
+            f"Background ring: "
+            f"{nearest_feature['background_inner_radius_px']:.1f}–"
+            f"{nearest_feature['background_outer_radius_px']:.1f} px"
+        )
+
+        annotation.set_visible(True)
+        self.canvas.draw_idle()
+
+    def rebuild_binary_mask(self) -> None:
+        """Recreate the final mask exactly from the features currently retained."""
+        if self.raw_mask is None:
+            self.binary_mask = None
+            return
+
+        self.binary_mask = np.zeros_like(self.raw_mask, dtype=np.uint8)
+
+        for feature in self.features:
+            coordinates = np.asarray(feature.get("mask_coords", []), dtype=int).reshape(-1, 2)
+            if len(coordinates) == 0:
+                continue
+            self.binary_mask[coordinates[:, 0], coordinates[:, 1]] = 1
+
     def remove_nearest_feature(self, x: float, y: float) -> None:
         if not self.features:
             return
 
-        distances = [(idx, np.hypot(f["cx"] - x, f["cy"] - y)) for idx, f in enumerate(self.features)]
-        nearest_idx, dist = min(distances, key=lambda item: item[1])
-        nearest_feat = self.features[nearest_idx]
+        distances = [(idx, np.hypot(feature["cx"] - x, feature["cy"] - y)) for idx, feature in enumerate(self.features)]
+        nearest_idx, distance = min(distances, key=lambda item: item[1])
+        nearest_feature = self.features[nearest_idx]
 
-        if dist <= nearest_feat["r"] + 5:
-            removed = self.features.pop(nearest_idx)
+        if distance > nearest_feature["r"] + 5:
+            return
 
-            rr, cc = draw_disk(
-                (removed["cy"], removed["cx"]),
-                removed["r"] + 1,
-                shape=self.binary_mask.shape,
-            )
-            self.binary_mask[rr, cc] = 0
+        removed = self.features.pop(nearest_idx)
+        removed["manual_status"] = "false_positive"
+        self.false_positives.append(removed.copy())
+        self.rebuild_binary_mask()
 
     def add_manual_feature(self, x: float, y: float) -> None:
-        """
-        Add a manually selected false negative only when its local AFM
-        height satisfies the same 6 Å physical requirement.
-        """
+        """Add a manually selected false negative to the corrected ground truth."""
         if self.features:
-            radius = float(np.median([f["r"] for f in self.features]))
+            radius = float(np.median([feature["r"] for feature in self.features]))
         else:
             radius = 5.0
 
@@ -1037,54 +1131,45 @@ class AFMSegmentationApp:
         )
 
         if measurement is None:
-            print(
-                "Manual candidate rejected: local height could not be measured.",
-                flush=True,
-            )
+            print("Manual candidate rejected: local height could not be measured.", flush=True)
             return
-
-        # if measurement["local_height_m"] < MINIMUM_QD_HEIGHT_M:
-            #print(
-                #"Manual candidate rejected: "
-                #f"{measurement['local_height_A']:.2f} Å is below 6 Å.",
-                #flush=True,
-            #)
-            #return
-
-        area = float(np.pi * radius**2)
-
-        self.features.append(
-            {
-                "cx": measurement["peak_x"],
-                "cy": measurement["peak_y"],
-                "r": radius,
-                "area": area,
-                "circularity": 1.0,
-                "peak_value_m": measurement["peak_value_m"],
-                "local_background_m": measurement["local_background_m"],
-                "local_height_m": measurement["local_height_m"],
-                "local_height_nm": measurement["local_height_nm"],
-                "local_height_A": measurement["local_height_A"],
-                "background_inner_radius_px": measurement["background_inner_radius_px"],
-                "background_outer_radius_px": measurement["background_outer_radius_px"],
-                "background_pixel_count": measurement["background_pixel_count"],
-            }
-        )
 
         rr, cc = draw_disk(
             (measurement["peak_y"], measurement["peak_x"]),
             radius,
             shape=self.binary_mask.shape,
         )
-        self.binary_mask[rr, cc] = 1
+        mask_coords = np.column_stack((rr, cc))
 
-        print(
-            "Manual QDs: "
-            f"{measurement['local_height_A']:.2f} Å.",
-            flush=True,
-        )
+        feature = {
+            "cx": measurement["peak_x"],
+            "cy": measurement["peak_y"],
+            "r": radius,
+            "area": float(len(mask_coords)),
+            "circularity": 1.0,
+            "peak_value_m": measurement["peak_value_m"],
+            "local_background_m": measurement["local_background_m"],
+            "local_height_m": measurement["local_height_m"],
+            "local_height_nm": measurement["local_height_nm"],
+            "local_height_A": measurement["local_height_A"],
+            "background_inner_radius_px": measurement["background_inner_radius_px"],
+            "background_outer_radius_px": measurement["background_outer_radius_px"],
+            "background_pixel_count": measurement["background_pixel_count"],
+            "manual_status": "false_negative",
+            "mask_coords": mask_coords,
+        }
 
+        self.features.append(feature)
+        self.false_negatives.append(feature.copy())
+        self.rebuild_binary_mask()
 
+        print(f"Manual QD: {measurement['local_height_A']:.2f} Å.", flush=True)
+
+    @staticmethod
+    def features_to_dataframe(features: list[dict]) -> pd.DataFrame:
+        """Convert feature dictionaries to a CSV-safe table."""
+        rows = [{key: value for key, value in feature.items() if key != "mask_coords"} for feature in features]
+        return pd.DataFrame(rows)
 
     def export_data(self) -> None:
         if self.binary_mask is None or self.filepath is None:
@@ -1105,13 +1190,15 @@ class AFMSegmentationApp:
             save_path_base = save_path_base.rsplit(".", 1)[0]
 
         np.save(f"{save_path_base}_mask.npy", self.binary_mask)
+        self.features_to_dataframe(self.features).to_csv(f"{save_path_base}_features.csv", index=False)
+        self.features_to_dataframe(self.false_positives).to_csv(f"{save_path_base}_false_positives.csv", index=False)
+        self.features_to_dataframe(self.false_negatives).to_csv(f"{save_path_base}_false_negatives.csv", index=False)
 
-        df = pd.DataFrame(self.features)
-        df.to_csv(f"{save_path_base}_features.csv", index=False)
-
-        print(f"Successfully exported:", flush=True)
+        print("Successfully exported:", flush=True)
         print(f"  {save_path_base}_mask.npy", flush=True)
         print(f"  {save_path_base}_features.csv", flush=True)
+        print(f"  {save_path_base}_false_positives.csv", flush=True)
+        print(f"  {save_path_base}_false_negatives.csv", flush=True)
 
 
 

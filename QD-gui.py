@@ -834,7 +834,7 @@ class QDAnalysisApp:
                 if perimeter <= 0:
                     circularity = 0.0
                 else:
-                    circularity = float((4 * np.pi * prop.area) / (perimeter**2))
+                    circularity = float((4 * np.pi * prop.area) / (2 * perimeter)**2)
 
                 if circularity >= circ_cutoff and area_lower <= prop.area <= area_upper:
                     cy, cx = prop.centroid

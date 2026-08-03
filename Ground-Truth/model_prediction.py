@@ -64,7 +64,7 @@ def predict_full_scan(model, image, patch_size=128):
 
 
 prediction = predict_full_scan(model, X_test, patch_size=128,)
-predicted_mask = prediction >= 0.1
+predicted_mask = prediction >= 0.2
 
 
 # REMOVE TINY OBJECTS

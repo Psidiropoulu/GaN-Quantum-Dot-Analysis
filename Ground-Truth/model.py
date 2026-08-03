@@ -16,7 +16,15 @@ import data_preprocessing as dp
 
 ground_truth_root = "Ground-Truth/NPY-Ground-Truth"
 
-scan_names = ["Scan1", "Scan2", "Scan3",]
+scan_names = ["Scan1", 
+              "Scan2", 
+              "Scan3", 
+              "SPM_1nm_QD_AFMs_AIX6468_along_curved_edge_1um_100pN_18gain.0_00000", 
+              "SPM_1nm_QD_AFMs_AIX6468_along_the_flat_edge_1um_100pN_18gain.0_00000",
+              "SPM_2nm_QD_AFMs_AIX6461_along_the_flat_edge_1um_200pN_15gain_2um_zrange.0_00000",
+              "SPM_2nm_QD_AFMs_AIX6461_in_the_centre_1um_200pN_10gain_2um_zrange.0_00000",
+              "SPM_3nm_QD_AFMs_AIX6470_along_curved_edge_1um_100pN_18gain.0_00000",
+              "SPM_3nm_QD_AFMs_AIX6470_along_curved_edge_1um_100pN_18gain.0_00001"]
 dataset = []
 
 for scan_name in scan_names:
@@ -47,23 +55,20 @@ for scan_name in scan_names:
         "stages": stages,
     })
 
+# LEAVE ONE SCAN OUT FOR TESTING
 
-# LEAVE-ONE-SCAN-OUT FOLDS
+test_scan_name = "Scan3"
 
-folds = [
-    {
-        "train_indices": [0, 1],
-        "test_index": 2,
-    },
-    {
-        "train_indices": [0, 2],
-        "test_index": 1,
-    },
-    {
-        "train_indices": [1, 2],
-        "test_index": 0,
-    },
-]
+if test_scan_name not in scan_names:
+    raise ValueError(f"Test scan {test_scan_name!r} is not present in scan_names.")
+
+test_index = scan_names.index(test_scan_name)
+train_indices = [index for index in range(len(scan_names)) if index != test_index]
+
+fold = {
+    "train_indices": train_indices,
+    "test_index": test_index,
+}
 
 
 # PATCH EXTRACTION
@@ -115,7 +120,6 @@ def augment_dataset(X, Y):
 
 # BUILD FIRST FOLD
 
-fold = folds[0]
 X_train = []
 Y_train = []
 
