@@ -1,4 +1,6 @@
+from matplotlib import image
 import numpy as np
+import pandas as pd
 
 from scipy.ndimage import distance_transform_edt, gaussian_filter, gaussian_laplace
 from skimage.draw import disk
@@ -16,6 +18,8 @@ from skimage.segmentation import (
     watershed,
 )
 from skimage.transform import hough_circle, hough_circle_peaks
+
+from detection_errors import evaluate_detection
 
 
 # CONSISTENT OUTPUT HELPERS
@@ -78,6 +82,72 @@ def make_detection_stage(image_shape, centres, heights=None, radii=None, areas=N
         "heights": heights,
         "radii": radii,
         "areas": areas,
+    }
+
+
+
+def make_ground_truth_result(mask, processed_image):
+    mask = np.asarray(mask, dtype=bool)
+    processed_image = np.asarray(processed_image, dtype=float)
+
+    labelled_mask = label(mask, connectivity=2)
+    regions = regionprops(labelled_mask)
+
+    centres = []
+    heights = []
+    radii = []
+    areas = []
+
+    for region in regions:
+        centre_y, centre_x = region.centroid
+        area = float(region.area)
+        radius = float(np.sqrt(area / np.pi))
+
+        region_rows = region.coords[:, 0]
+        region_columns = region.coords[:, 1]
+
+        peak_index = np.argmax(processed_image[region_rows, region_columns])
+        peak_y = region_rows[peak_index]
+        peak_x = region_columns[peak_index]
+
+        peak_value = processed_image[peak_y, peak_x]
+
+        inner_radius = 5
+        outer_radius = 10
+
+        y0 = max(0, peak_y - outer_radius)
+        y1 = min(processed_image.shape[0], peak_y + outer_radius + 1)
+        x0 = max(0, peak_x - outer_radius)
+        x1 = min(processed_image.shape[1], peak_x + outer_radius + 1)
+
+        patch = processed_image[y0:y1, x0:x1]
+
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        distance_squared = (yy - peak_y) ** 2 + (xx - peak_x) ** 2
+
+        ring = (
+            (distance_squared >= inner_radius**2)
+            & (distance_squared <= outer_radius**2)
+            & np.isfinite(patch)
+        )
+
+        if np.count_nonzero(ring) >= 10:
+            background = np.median(patch[ring])
+            height = peak_value - background
+        else:
+            height = np.nan
+
+        centres.append((peak_y, peak_x))
+        heights.append(height)
+        radii.append(radius)
+        areas.append(area)
+
+    return {
+        "mask": mask,
+        "centres": np.asarray(centres, dtype=float).reshape(-1, 2),
+        "heights": np.asarray(heights, dtype=float),
+        "radii": np.asarray(radii, dtype=float),
+        "areas": np.asarray(areas, dtype=float),
     }
 
 
@@ -549,6 +619,17 @@ def sift_detect(
     return build_detection_result(processed_image, image, centres, radii, minimum_height=minimum_height, extra={"descriptors": descriptors})
 
 
+
+def regions_to_contiguous_label_mask(shape, regions):
+    filtered_labels = np.zeros(shape, dtype=np.int32)
+
+    for new_label, region in enumerate(regions, start=1):
+        filtered_labels[region.coords[:, 0], region.coords[:, 1]] = new_label
+
+    return filtered_labels
+
+
+
 def geometric_contour_detect(
     striped_image,
     destriped_image,
@@ -572,10 +653,11 @@ def geometric_contour_detect(
     contour_mask = morphological_geodesic_active_contour(processed_image, num_iter=num_iter, init_level_set=initial_mask, smoothing=smoothing, balloon=balloon, threshold=threshold)
     labelled_mask = label(contour_mask)
     regions = [region for region in regionprops(labelled_mask) if region.area >= min_area]
+    filtered_labels = regions_to_contiguous_label_mask(image.shape, regions)
     centres = np.asarray([region.centroid for region in regions], dtype=float).reshape(-1, 2) if regions else _empty_centres()
     areas = np.asarray([region.area for region in regions], dtype=float)
     radii = np.sqrt(areas / np.pi)
-    return build_detection_result(processed_image, image, centres, radii, areas, candidate_label_mask=labelled_mask, minimum_height=minimum_height, extra={"initial_mask": initial_mask, "contour_mask": contour_mask})
+    return build_detection_result(processed_image, image, centres, radii, areas, candidate_label_mask=filtered_labels, minimum_height=minimum_height, extra={"initial_mask": initial_mask, "contour_mask": contour_mask})
 
 
 def chan_vese_detect(
@@ -683,3 +765,46 @@ def gabor_detect(
     centres = peak_local_max(combined_response, min_distance=min_distance, threshold_abs=threshold, exclude_border=False)
     radii = np.full(len(centres), np.nan)
     return build_detection_result(combined_response, image, centres, radii, minimum_height=minimum_height, extra={"response_maps": response_maps, "threshold": threshold, "small_feature_image": small_feature_image})
+
+
+
+def make_results_row(algorithm_name, stage_name, predicted_result, true_result):
+    metrics = evaluate_detection(
+        predicted_result=predicted_result,
+        true_result=true_result,
+        max_distance=5,
+    )
+
+    return {
+        "Algorithm": algorithm_name,
+        "Stage": stage_name,
+
+        "Predicted count": len(predicted_result["centres"]),
+        "True count": len(true_result["centres"]),
+        "Count error": metrics["count_error"],
+        "Absolute count error": metrics["absolute_count_error"],
+
+        "Pixel precision": metrics["pixel_precision"],
+        "Pixel recall": metrics["pixel_recall"],
+        "Pixel F1": metrics["pixel_f1"],
+        "Dice": metrics["dice"],
+        "IoU": metrics["iou"],
+
+        "Object precision": metrics["object_precision"],
+        "Object recall": metrics["object_recall"],
+        "Object F1": metrics["object_f1"],
+
+        "Localisation mean (px)": metrics["localisation"]["mean"],
+        "Localisation median (px)": metrics["localisation"]["median"],
+        "Localisation RMSE (px)": metrics["localisation"]["rmse"],
+        "Localisation maximum (px)": metrics["localisation"]["maximum"],
+
+        "Height MAE": metrics["parameters"]["height"]["mae"],
+        "Height RMSE": metrics["parameters"]["height"]["rmse"],
+
+        "Radius MAE": metrics["parameters"]["radius"]["mae"],
+        "Radius RMSE": metrics["parameters"]["radius"]["rmse"],
+
+        "Area MAE": metrics["parameters"]["area"]["mae"],
+        "Area RMSE": metrics["parameters"]["area"]["rmse"],
+    }
