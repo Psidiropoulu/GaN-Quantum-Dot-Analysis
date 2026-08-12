@@ -356,25 +356,12 @@ def preprocess_afm(
     """
     Apply selected AFM preprocessing steps.
     """
-    result = np.asarray(
-        z,
-        dtype=float,
-    ).copy()
-
-    stages = {
-        "raw": result.copy(),
-    }
+    result = np.asarray(z, dtype=float).copy()
+    stages = {"raw": result.copy()}
 
     if remove_plane:
-        result, _ = subtract_global_plane(
-            result,
-            n_iterations=6,
-            sigma=2.5,
-        )
-
-        stages["plane removed"] = (
-            result.copy()
-        )
+        result, _ = subtract_global_plane(result, n_iterations=6, sigma=2.5)
+        stages["plane removed"] = (result.copy())
 
     if line_flatten:
         result = robust_polynomial_line_flatten(
@@ -385,19 +372,11 @@ def preprocess_afm(
             axis=1,
         )
 
-        stages["line flattened"] = (
-            result.copy()
-        )
+        stages["line flattened"] = (result.copy())
 
     if align_rows:
-        result = align_scanline_offsets(
-            result,
-            smoothing_window=21,
-        )
-
-        stages["rows aligned"] = (
-            result.copy()
-        )
+        result = align_scanline_offsets(result, smoothing_window=21)
+        stages["rows aligned"] = (result.copy())
 
     if remove_2d_background:
         result = robust_2d_background(
@@ -412,12 +391,8 @@ def preprocess_afm(
             result.copy()
         )
 
-    result = (
-        result - np.nanmedian(result)
-    )
-
+    result = (result - np.nanmedian(result))
     stages["final"] = result.copy()
-
     return result, stages
 
 
