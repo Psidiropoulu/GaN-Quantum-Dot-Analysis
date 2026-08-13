@@ -14,7 +14,16 @@ from skimage.morphology import remove_small_objects
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import data_preprocessing as dp
+PROJECT_ROOT = Path.cwd()
+PREPROCESSING_DIR = PROJECT_ROOT / "Image-Preprocessing"
+
+sys.path.insert(
+    0,
+    str(PREPROCESSING_DIR),
+)
+
+import basic_data_preprocessing as bdp
+import foreground_preprocessing as fp
 
 
 # LOAD SAVED MODEL
@@ -32,7 +41,7 @@ print("Ground-truth QDs:", number_of_ground_truth_qds)
 
 
 # PREPROCESS EXACTLY LIKE TRAINING
-image_preprocessed, _ = dp.preprocess_afm(
+image_preprocessed, _ = bdp.preprocess_afm(
     image,
     remove_plane=True,
     line_flatten=True,
@@ -40,7 +49,7 @@ image_preprocessed, _ = dp.preprocess_afm(
     remove_2d_background=False,
 )
 
-X_test = dp.robust_normalise(image_preprocessed)
+X_test = bdp.robust_normalise(image_preprocessed)
 
 
 # PREDICT ON THE UNSEEN TEST SCAN

@@ -34,6 +34,13 @@ BACKGROUND_OUTER_FACTOR = 1.5
 MINIMUM_BACKGROUND_PIXELS = 10
 
 
+# Converting pixels to angstroms.. roughly...
+SCAN_WIDTH_M = 500e-9
+IMAGE_WIDTH_PX = 512
+PIXEL_SIZE_M = SCAN_WIDTH_M / IMAGE_WIDTH_PX
+PIXEL_SIZE_A = PIXEL_SIZE_M * 1e10
+
+
 def load_npy_image(path: str | Path) -> np.ndarray:
     """
     Load one already-converted AFM .npy image.
@@ -68,6 +75,106 @@ def percentile_limits(z: np.ndarray, low: float = 1, high: float = 99) -> tuple[
         vmax = float(np.max(z))
 
     return float(vmin), float(vmax)
+
+
+def measure_fwhm(
+    peak_y: int,
+    peak_x: int,
+    peak_value: float,
+    local_background: float,
+    z_physical: np.ndarray,
+    search_radius: int,
+) -> dict[str, float] | None:
+    """
+    Measure QD full width at half maximum through the AFM apex.
+    Half-height is defined relative to the local background: half_level = background + 0.5 * (peak - background)
+    FWHM is measured independently along x and y using linear interpolation between pixels surrounding each half-height crossing.
+    """
+
+    z_physical = np.asarray(z_physical, dtype=float)
+    rows, columns = z_physical.shape
+
+    half_level = (local_background + 0.5 * (peak_value - local_background))
+
+    def find_crossing(profile, peak_index, direction):
+        """
+        Move away from the peak until the profile crosses the half-height.
+        Return the interpolated crossing position.
+        """
+
+        i = peak_index
+
+        while True:
+            j = i + direction
+
+            if j < 0 or j >= len(profile):
+                return None
+
+            value_i = profile[i]
+            value_j = profile[j]
+
+            if not np.isfinite(value_i) or not np.isfinite(value_j):
+                return None
+
+            # Crossing from above half-height to below half-height.
+            if value_i >= half_level and value_j < half_level:
+
+                if value_j == value_i:
+                    return float(i)
+                fraction = (half_level - value_i) / (value_j - value_i)
+
+                return float(i + fraction * (j - i))
+            i = j
+
+    # Horizontal profile through apex
+    x0 = max(0, peak_x - search_radius)
+    x1 = min(columns, peak_x + search_radius + 1)
+
+    profile_x = z_physical[peak_y, x0:x1]
+    peak_x_local = peak_x - x0
+
+    left = find_crossing(profile_x, peak_x_local, direction=-1)
+    right = find_crossing(profile_x, peak_x_local, direction=1)
+
+    if left is not None and right is not None:
+        fwhm_x = right - left
+    else:
+        fwhm_x = np.nan
+
+
+    # Vertical profile through apex
+    y0 = max(0, peak_y - search_radius)
+    y1 = min(rows, peak_y + search_radius + 1)
+
+    profile_y = z_physical[y0:y1, peak_x]
+    peak_y_local = peak_y - y0
+
+    top = find_crossing(profile_y, peak_y_local, direction=-1)
+    bottom = find_crossing(profile_y, peak_y_local, direction=1)
+
+    if top is not None and bottom is not None:
+        fwhm_y = bottom - top
+    else:
+        fwhm_y = np.nan
+
+    valid_widths = [width for width in (fwhm_x, fwhm_y) if np.isfinite(width)]
+
+    if not valid_widths:
+        return None
+
+    fwhm_px = float(np.mean(valid_widths))
+
+    return {
+        "fwhm_x_px": float(fwhm_x),
+        "fwhm_y_px": float(fwhm_y),
+        "fwhm_px": fwhm_px,
+
+        "fwhm_x_A": float(fwhm_x * PIXEL_SIZE_A),
+        "fwhm_y_A": float(fwhm_y * PIXEL_SIZE_A),
+        "fwhm_A": float(fwhm_px * PIXEL_SIZE_A),
+
+        "half_maximum_m": float(half_level),
+    }
 
 
 def measure_local_height(
@@ -157,19 +264,58 @@ def measure_local_height(
     local_background = float(np.median(background_patch[ring_mask]))
     local_height = float(peak_value - local_background)
 
+    fwhm_measurement = measure_fwhm(
+        peak_y=peak_y,
+        peak_x=peak_x,
+        peak_value=peak_value,
+        local_background=local_background,
+        z_physical=z_physical,
+        search_radius=max(int(np.ceil(3.0 * qd_radius)), 5),
+    )
+
+    if fwhm_measurement is None:
+        fwhm_x_px = np.nan
+        fwhm_y_px = np.nan
+        fwhm_px = np.nan
+
+        fwhm_x_A = np.nan
+        fwhm_y_A = np.nan
+        fwhm_A = np.nan
+
+    else:
+        fwhm_x_px = fwhm_measurement["fwhm_x_px"]
+        fwhm_y_px = fwhm_measurement["fwhm_y_px"]
+        fwhm_px = fwhm_measurement["fwhm_px"]
+
+        fwhm_x_A = fwhm_measurement["fwhm_x_A"]
+        fwhm_y_A = fwhm_measurement["fwhm_y_A"]
+        fwhm_A = fwhm_measurement["fwhm_A"]
+
     return {
         "peak_y": float(peak_y),
         "peak_x": float(peak_x),
+
         "peak_value_m": peak_value,
         "local_background_m": local_background,
+
         "local_height_m": local_height,
         "local_height_nm": local_height * 1e9,
         "local_height_A": local_height * 1e10,
+
+        "fwhm_x_px": fwhm_x_px,
+        "fwhm_y_px": fwhm_y_px,
+        "fwhm_px": fwhm_px,
+
+        "fwhm_x_A": fwhm_x_A,
+        "fwhm_y_A": fwhm_y_A,
+        "fwhm_A": fwhm_A,
+
         "background_inner_radius_px": float(background_inner_radius),
         "background_outer_radius_px": float(background_outer_radius),
+        "background_inner_radius_A": float(background_inner_radius * PIXEL_SIZE_A),
+        "background_outer_radius_A": float(background_outer_radius * PIXEL_SIZE_A),
         "background_pixel_count": float(background_pixel_count),
     }
-
 
 # ==========================================================
 # Optional AFM preprocessing operations used by GUI buttons
@@ -863,7 +1009,9 @@ class AFMSegmentationApp:
                         "cx": measurement["peak_x"],
                         "cy": measurement["peak_y"],
                         "r": radius,
+                        "r_A": radius * PIXEL_SIZE_A,
                         "area": float(prop.area),
+                        "area_A2": float(prop.area) * PIXEL_SIZE_A**2,
                         "circularity": circularity,
                         "peak_value_m": measurement["peak_value_m"],
                         "local_background_m": measurement["local_background_m"],
@@ -872,7 +1020,17 @@ class AFMSegmentationApp:
                         "local_height_A": measurement["local_height_A"],
                         "background_inner_radius_px": measurement["background_inner_radius_px"],
                         "background_outer_radius_px": measurement["background_outer_radius_px"],
+                        "background_inner_radius_A": measurement["background_inner_radius_A"],
+                        "background_outer_radius_A": measurement["background_outer_radius_A"],
                         "background_pixel_count": measurement["background_pixel_count"],
+                        "manual_status": "automatic",
+                        "mask_coords": prop.coords.copy(),
+                        "fwhm_x_px": measurement["fwhm_x_px"],
+                        "fwhm_y_px": measurement["fwhm_y_px"],
+                        "fwhm_px": measurement["fwhm_px"],
+                        "fwhm_x_A": measurement["fwhm_x_A"],
+                        "fwhm_y_A": measurement["fwhm_y_A"],
+                        "fwhm_A": measurement["fwhm_A"],
                         "manual_status": "automatic",
                         "mask_coords": prop.coords.copy(),
                     }
@@ -965,6 +1123,27 @@ class AFMSegmentationApp:
             self.hover_annotations[ax] = annotation
 
         self.fig.tight_layout()
+
+        # Remove the previous floating QD profile axes if it exists.
+        if hasattr(self, "profile_ax"):
+            try:
+                self.profile_ax.remove()
+            except Exception:
+                pass
+
+
+        # Floating QD profile graph.
+        # [left, bottom, width, height] values are fractions of the entire Matplotlib canvas.
+        self.profile_ax = self.fig.add_axes(
+            [0.37, 0.58, 0.26, 0.28],
+            zorder=20,
+        )
+
+        self.profile_ax.set_visible(False)
+
+        # Tracks which QD is currently being hovered.
+        self._hovered_feature_index = None
+
         self.canvas.draw_idle()
 
     # ------------------------------------------------------
@@ -1028,6 +1207,99 @@ class AFMSegmentationApp:
 
         self.update_plots()
 
+    def get_qd_axis_profiles(self, feature: dict, radius_factor: float = 3.0) -> dict[str, np.ndarray] | None:
+        """
+        Extract horizontal and vertical AFM height profiles through
+        the measured QD apex.
+
+        Horizontal: z(y_peak, x)
+        Vertical: z(y, x_peak)
+
+        Lateral distance is returned in Å.
+        Height is returned relative to the QD local background in Å.
+        """
+
+        if self.corrected_image is None:
+            return None
+
+        z = np.asarray(self.corrected_image, dtype=float)
+
+        rows, columns = z.shape
+
+        peak_x = int(round(feature["cx"]))
+        peak_y = int(round(feature["cy"]))
+        radius_px = float(feature["r"])
+        profile_radius_px = max(int(np.ceil(radius_factor * radius_px)), 5)
+
+        # Horizontal profile through QD apex
+        x0 = max(0, peak_x - profile_radius_px)
+        x1 = min(columns, peak_x + profile_radius_px + 1)
+
+        horizontal_height_m = z[peak_y, x0:x1]
+        horizontal_pixel_positions = (np.arange(x0, x1) - peak_x)
+        horizontal_distance_A = (horizontal_pixel_positions*PIXEL_SIZE_A)
+
+        # Vertical profile through QD apex
+        y0 = max(0, peak_y - profile_radius_px)
+        y1 = min(rows, peak_y + profile_radius_px + 1)
+
+        vertical_height_m = z[y0:y1, peak_x]
+        vertical_pixel_positions = np.arange(y0, y1) - peak_y
+        vertical_distance_A = vertical_pixel_positions * PIXEL_SIZE_A
+
+        # Remove local background
+        background_m = feature["local_background_m"]
+
+        horizontal_height_A = (horizontal_height_m - background_m) * 1e10
+        vertical_height_A = (vertical_height_m - background_m) * 1e10
+
+        return {
+            "horizontal_distance_A": horizontal_distance_A,
+            "horizontal_height_A": horizontal_height_A,
+            "vertical_distance_A": vertical_distance_A,
+            "vertical_height_A": vertical_height_A,
+        }
+
+    def update_qd_profile_plot(self, feature: dict) -> None:
+        """
+        Update the floating profile plot for the currently hovered QD.
+        """
+
+        profiles = self.get_qd_axis_profiles(feature)
+
+        if profiles is None:
+            self.profile_ax.set_visible(False)
+            return
+
+        ax = self.profile_ax
+
+        ax.clear()
+        ax.set_visible(True)
+
+        # Horizontal centre-line profile
+        ax.plot(profiles["horizontal_distance_A"], profiles["horizontal_height_A"], label="Horizontal", linewidth=1.5,)
+        # Vertical centre-line profile
+        ax.plot(profiles["vertical_distance_A"], profiles["vertical_height_A"], label="Vertical", linewidth=1.5, linestyle="--",)
+
+        # Local background
+        ax.axhline(0, linewidth=0.8, linestyle=":", color="gray")
+
+        # Half maximum
+        half_height_A = (feature["local_height_A"] / 2.0)
+        ax.axhline(half_height_A, linewidth=0.8, linestyle=":",)
+
+        # QD centre
+        ax.axvline(0, linewidth=0.8, linestyle=":",)
+
+        ax.set_xlabel("Distance from apex (Å)", fontsize=4)
+
+        ax.set_ylabel("Height above background (Å)", fontsize=4)
+        ax.set_title("QD centre profiles", fontsize=4)
+
+        ax.tick_params(axis="both", labelsize=3)
+        ax.legend(fontsize=6, loc="best")
+        ax.grid(alpha=0.2)
+
     def on_canvas_hover(self, event) -> None:
         if not hasattr(self, "hover_annotations"):
             return
@@ -1035,12 +1307,20 @@ class AFMSegmentationApp:
         valid_axes = (self.axs[0], self.axs[1])
 
         if event.inaxes not in valid_axes or event.xdata is None or event.ydata is None:
+
             changed = False
 
             for annotation in self.hover_annotations.values():
                 if annotation.get_visible():
                     annotation.set_visible(False)
                     changed = True
+
+            if hasattr(self, "profile_ax"):
+                if self.profile_ax.get_visible():
+                    self.profile_ax.set_visible(False)
+                    changed = True
+
+            self._hovered_feature_index = None
 
             if changed:
                 self.canvas.draw_idle()
@@ -1068,19 +1348,38 @@ class AFMSegmentationApp:
             annotation.set_visible(False)
 
         if nearest_distance > hover_distance:
-            self.canvas.draw_idle()
-            return
 
+            if nearest_distance > hover_distance:
+                if hasattr(self, "profile_ax"):
+                    self.profile_ax.set_visible(False)
+
+                self._hovered_feature_index = None
+
+                self.canvas.draw_idle()
+                return
+
+        # Only redraw the profile when we move onto a different QD.
+        if self._hovered_feature_index != nearest_index:
+
+            self.update_qd_profile_plot(
+                nearest_feature
+            )
+
+            self._hovered_feature_index = nearest_index
+            
         annotation = self.hover_annotations[event.inaxes]
         annotation.xy = (nearest_feature["cx"], nearest_feature["cy"])
 
         annotation.set_text(
             f"Height: {nearest_feature['local_height_A']:.2f} Å\n"
-            f"Radius: {nearest_feature['r']:.2f} px\n"
-            f"Area: {nearest_feature['area']:.1f} px²\n"
+            f"FWHM: {nearest_feature['fwhm_A']:.2f} Å\n"
+            f"FWHM X: {nearest_feature['fwhm_x_A']:.2f} Å\n"
+            f"FWHM Y: {nearest_feature['fwhm_y_A']:.2f} Å\n"
+            f"Radius: {nearest_feature['r_A']:.2f} Å\n"
+            f"Area: {nearest_feature['area_A2']:.1f} Å²\n"
             f"Background ring: "
-            f"{nearest_feature['background_inner_radius_px']:.1f}–"
-            f"{nearest_feature['background_outer_radius_px']:.1f} px"
+            f"{nearest_feature['background_inner_radius_A']:.1f}–"
+            f"{nearest_feature['background_outer_radius_A']:.1f} Å"
         )
 
         annotation.set_visible(True)
@@ -1145,16 +1444,23 @@ class AFMSegmentationApp:
             "cx": measurement["peak_x"],
             "cy": measurement["peak_y"],
             "r": radius,
+            "r_A": radius * PIXEL_SIZE_A,
             "area": float(len(mask_coords)),
+            "area_A2": float(len(mask_coords)) * PIXEL_SIZE_A**2,
             "circularity": 1.0,
             "peak_value_m": measurement["peak_value_m"],
             "local_background_m": measurement["local_background_m"],
             "local_height_m": measurement["local_height_m"],
             "local_height_nm": measurement["local_height_nm"],
             "local_height_A": measurement["local_height_A"],
-            "background_inner_radius_px": measurement["background_inner_radius_px"],
-            "background_outer_radius_px": measurement["background_outer_radius_px"],
-            "background_pixel_count": measurement["background_pixel_count"],
+            "fwhm_x_px": measurement["fwhm_x_px"],
+            "fwhm_y_px": measurement["fwhm_y_px"],
+            "fwhm_px": measurement["fwhm_px"],
+            "fwhm_x_A": measurement["fwhm_x_A"],
+            "fwhm_y_A": measurement["fwhm_y_A"],
+            "fwhm_A": measurement["fwhm_A"],
+            "background_inner_radius_A": measurement["background_inner_radius_A"],
+            "background_outer_radius_A": measurement["background_outer_radius_A"],
             "manual_status": "false_negative",
             "mask_coords": mask_coords,
         }
