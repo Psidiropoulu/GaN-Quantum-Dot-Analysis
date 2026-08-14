@@ -556,6 +556,7 @@ class AFMSegmentationApp:
         self.features: list[dict] = []
         self.false_positives: list[dict] = []
         self.false_negatives: list[dict] = []
+        self.next_qd_number = 1
 
         self.edit_mode: str | None = None  # 'FP', 'FN', or None
         self.sliders_active = True
@@ -649,12 +650,16 @@ class AFMSegmentationApp:
         plot_frame = tk.Frame(main_pane)
         main_pane.add(plot_frame)
 
-        self.fig, self.axs = plt.subplots(1, 2, figsize=(12, 6))
+        self.fig, self.axs = plt.subplots(1, 3, figsize=(15, 6), gridspec_kw={"width_ratios": [1.0, 1.0, 0.8]})
+        self.afm_ax = self.axs[0]
+        self.mask_ax = self.axs[1]
+        self.profile_ax = self.axs[2]
+        self.fig.subplots_adjust(left=0.03, right=0.98, bottom=0.08, top=0.90, wspace=0.18)
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
         self.fig.canvas.mpl_connect("button_press_event", self.on_canvas_click)
         self.fig.canvas.mpl_connect("motion_notify_event", self.on_canvas_hover)
-        self.fig.tight_layout()
+        self._hovered_feature_index = None
 
         self.update_empty_plots()
 
@@ -797,7 +802,7 @@ class AFMSegmentationApp:
         self.features = []
         self.false_positives = []
         self.false_negatives = []
-
+        self.next_qd_number = 1
         self.last_r_th = None
         self.last_sigma = None
         self.last_thresh = None
@@ -915,7 +920,7 @@ class AFMSegmentationApp:
     def run_pipeline(self, *args) -> None:
         if self.corrected_image is None or not self.sliders_active:
             return
-
+        
         r_th = int(self.val_tophat.get())
         sigma = float(self.val_sigma.get())
         thresh_val = float(self.val_thresh.get())
@@ -1006,6 +1011,7 @@ class AFMSegmentationApp:
                         continue
 
                     feature = {
+                        "qd_number": None,
                         "cx": measurement["peak_x"],
                         "cy": measurement["peak_y"],
                         "r": radius,
@@ -1044,12 +1050,19 @@ class AFMSegmentationApp:
 
 
     def update_empty_plots(self) -> None:
-        for ax in self.axs.ravel():
-            ax.clear()
-            ax.axis("off")
-            ax.text(0.5, 0.5, "Load a .npy file", ha="center", va="center", transform=ax.transAxes)
+        self.afm_ax.clear()
+        self.mask_ax.clear()
+        self.profile_ax.clear()
 
-        self.canvas.draw()
+        self.afm_ax.axis("off")
+        self.mask_ax.axis("off")
+        self.profile_ax.axis("off")
+
+        self.afm_ax.text(0.5, 0.5, "Load a .npy file", ha="center", va="center", transform=self.afm_ax.transAxes)
+        self.mask_ax.text(0.5, 0.5, "Binary mask", ha="center", va="center", transform=self.mask_ax.transAxes)
+        self.profile_ax.text(0.5, 0.5, "Hover over a QD", ha="center", va="center", transform=self.profile_ax.transAxes)
+
+        self.canvas.draw_idle()
 
     def update_plots(self) -> None:
         if self.corrected_image is None:
@@ -1069,7 +1082,10 @@ class AFMSegmentationApp:
         if self.show_labels:
             for f in self.features:
                 circle = plt.Circle((f["cx"], f["cy"]), f["r"] + 2, color="cyan", fill=False, lw=1.0)
-                self.axs[0].add_patch(circle)
+                self.afm_ax.add_patch(circle)
+
+                if f.get("qd_number") is not None:
+                    self.afm_ax.text(f["cx"] + f["r"] + 2, f["cy"] - f["r"] - 2, str(f["qd_number"]), fontsize=7, color="cyan", weight="bold")
 
         """
 
@@ -1122,28 +1138,12 @@ class AFMSegmentationApp:
             )
             self.hover_annotations[ax] = annotation
 
-        self.fig.tight_layout()
-
-        # Remove the previous floating QD profile axes if it exists.
-        if hasattr(self, "profile_ax"):
-            try:
-                self.profile_ax.remove()
-            except Exception:
-                pass
-
-
-        # Floating QD profile graph.
-        # [left, bottom, width, height] values are fractions of the entire Matplotlib canvas.
-        self.profile_ax = self.fig.add_axes(
-            [0.37, 0.58, 0.26, 0.28],
-            zorder=20,
-        )
-
-        self.profile_ax.set_visible(False)
+        self.profile_ax.clear()
+        self.profile_ax.axis("off")
+        self.profile_ax.text(0.5, 0.5, "Hover over a QD", ha="center", va="center", transform=self.profile_ax.transAxes, fontsize=10)
 
         # Tracks which QD is currently being hovered.
         self._hovered_feature_index = None
-
         self.canvas.draw_idle()
 
     # ------------------------------------------------------
@@ -1190,10 +1190,8 @@ class AFMSegmentationApp:
     def on_canvas_click(self, event) -> None:
         if self.binary_mask is None or self.corrected_image is None:
             return
-
-        if not self.edit_mode or event.inaxes not in [self.axs[0], self.axs[1]]:
+        if event.inaxes not in [self.afm_ax, self.mask_ax]:
             return
-
         if event.xdata is None or event.ydata is None:
             return
 
@@ -1204,6 +1202,8 @@ class AFMSegmentationApp:
             self.remove_nearest_feature(click_x, click_y)
         elif self.edit_mode == "FN":
             self.add_manual_feature(click_x, click_y)
+        else:
+            self.number_nearest_feature(click_x, click_y)
 
         self.update_plots()
 
@@ -1223,31 +1223,28 @@ class AFMSegmentationApp:
             return None
 
         z = np.asarray(self.corrected_image, dtype=float)
-
         rows, columns = z.shape
 
         peak_x = int(round(feature["cx"]))
         peak_y = int(round(feature["cy"]))
         radius_px = float(feature["r"])
+
         profile_radius_px = max(int(np.ceil(radius_factor * radius_px)), 5)
 
-        # Horizontal profile through QD apex
         x0 = max(0, peak_x - profile_radius_px)
         x1 = min(columns, peak_x + profile_radius_px + 1)
 
         horizontal_height_m = z[peak_y, x0:x1]
-        horizontal_pixel_positions = (np.arange(x0, x1) - peak_x)
-        horizontal_distance_A = (horizontal_pixel_positions*PIXEL_SIZE_A)
+        horizontal_positions_px = np.arange(x0, x1) - peak_x
+        horizontal_distance_A = horizontal_positions_px * PIXEL_SIZE_A
 
-        # Vertical profile through QD apex
         y0 = max(0, peak_y - profile_radius_px)
         y1 = min(rows, peak_y + profile_radius_px + 1)
 
         vertical_height_m = z[y0:y1, peak_x]
-        vertical_pixel_positions = np.arange(y0, y1) - peak_y
-        vertical_distance_A = vertical_pixel_positions * PIXEL_SIZE_A
+        vertical_positions_px = np.arange(y0, y1) - peak_y
+        vertical_distance_A = vertical_positions_px * PIXEL_SIZE_A
 
-        # Remove local background
         background_m = feature["local_background_m"]
 
         horizontal_height_A = (horizontal_height_m - background_m) * 1e10
@@ -1264,22 +1261,20 @@ class AFMSegmentationApp:
         """
         Update the floating profile plot for the currently hovered QD.
         """
-
         profiles = self.get_qd_axis_profiles(feature)
 
         if profiles is None:
-            self.profile_ax.set_visible(False)
             return
 
         ax = self.profile_ax
-
-        ax.clear()
         ax.set_visible(True)
+        ax.clear()
+        ax.axis("on")
 
         # Horizontal centre-line profile
-        ax.plot(profiles["horizontal_distance_A"], profiles["horizontal_height_A"], label="Horizontal", linewidth=1.5,)
+        ax.plot(profiles["horizontal_distance_A"], profiles["horizontal_height_A"], label="Horizontal", linewidth=0.8,)
         # Vertical centre-line profile
-        ax.plot(profiles["vertical_distance_A"], profiles["vertical_height_A"], label="Vertical", linewidth=1.5, linestyle="--",)
+        ax.plot(profiles["vertical_distance_A"], profiles["vertical_height_A"], label="Vertical", linewidth=0.8, linestyle="--",)
 
         # Local background
         ax.axhline(0, linewidth=0.8, linestyle=":", color="gray")
@@ -1370,7 +1365,8 @@ class AFMSegmentationApp:
         annotation = self.hover_annotations[event.inaxes]
         annotation.xy = (nearest_feature["cx"], nearest_feature["cy"])
 
-        annotation.set_text(
+        annotation.set_text(#
+            f"QD: {nearest_feature.get('qd_number', 'unassigned')}\n"
             f"Height: {nearest_feature['local_height_A']:.2f} Å\n"
             f"FWHM: {nearest_feature['fwhm_A']:.2f} Å\n"
             f"FWHM X: {nearest_feature['fwhm_x_A']:.2f} Å\n"
@@ -1415,6 +1411,26 @@ class AFMSegmentationApp:
         self.false_positives.append(removed.copy())
         self.rebuild_binary_mask()
 
+    def number_nearest_feature(self, x: float, y: float) -> None:
+        if not self.features:
+            return
+
+        distances = [np.hypot(feature["cx"] - x, feature["cy"] - y) for feature in self.features]
+        nearest_index = int(np.argmin(distances))
+        feature = self.features[nearest_index]
+
+        if distances[nearest_index] > feature["r"] + 3:
+            return
+
+        if feature.get("qd_number") is not None:
+            print(f"QD already numbered: {feature['qd_number']}", flush=True)
+            return
+
+        feature["qd_number"] = self.next_qd_number
+        print(f"Assigned QD {self.next_qd_number}: height = {feature['local_height_A']:.2f} Å", flush=True)
+
+        self.next_qd_number += 1
+
     def add_manual_feature(self, x: float, y: float) -> None:
         """Add a manually selected false negative to the corrected ground truth."""
         if self.features:
@@ -1441,6 +1457,7 @@ class AFMSegmentationApp:
         mask_coords = np.column_stack((rr, cc))
 
         feature = {
+            "qd_number": None,
             "cx": measurement["peak_x"],
             "cy": measurement["peak_y"],
             "r": radius,

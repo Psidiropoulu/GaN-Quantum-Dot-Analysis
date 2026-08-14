@@ -48,34 +48,18 @@ def subtract_global_plane(
 
     for _ in range(n_iterations):
 
-        design = np.column_stack(xx[fit_mask], yy[fit_mask], np.ones(np.count_nonzero(fit_mask)))
-        coefficients, *_ = np.linalg.lstsq(design,
-            z[fit_mask],
-            rcond=None,
-        )
+        design = np.column_stack((xx[fit_mask], yy[fit_mask], np.ones(np.count_nonzero(fit_mask))))
+        coefficients, *_ = np.linalg.lstsq(design, z[fit_mask], rcond=None)
 
         plane = (coefficients[0] * xx + coefficients[1] * yy + coefficients[2])
-
         residual = z - plane
-
-        centre = np.nanmedian(
-            residual[fit_mask]
-        )
-
-        scale = mad(
-            residual[fit_mask]
-        )
+        centre = np.nanmedian(residual[fit_mask])
+        scale = mad(residual[fit_mask])
 
         if not np.isfinite(scale) or scale == 0:
             break
 
-        fit_mask = (
-            finite
-            & (
-                np.abs(residual - centre)
-                < sigma * scale
-            )
-        )
+        fit_mask = (finite & (np.abs(residual - centre) < sigma * scale))
 
         if np.count_nonzero(fit_mask) < 3:
             break
