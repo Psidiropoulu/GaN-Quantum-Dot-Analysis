@@ -72,3 +72,15 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+# ==========================
+# LaTeX helper files
+# ==========================
+*.aux
+*.log
+*.fls
+*.fbd_latexmk
+*.out
+*.fdb_latexmk
+*.tex
+*.toc
