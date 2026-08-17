@@ -4,6 +4,7 @@
 
 venv-afm/
 venv-ml/
+biology/
 .venv/
 env/
 ENV/
