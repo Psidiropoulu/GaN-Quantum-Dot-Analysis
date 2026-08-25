@@ -16,6 +16,7 @@ Develop a reproducible pipeline that can take raw AFM data and:
 8. create a more aware model.
 
 This is a circular pipeline, as, of course, the more labelled data the better. Which in turn changes model's confidence thresholds.
+**`QD-gui.py/`** is the app that labels the QDs based on the algorithm selected.
 
 ## Repository structure
 
