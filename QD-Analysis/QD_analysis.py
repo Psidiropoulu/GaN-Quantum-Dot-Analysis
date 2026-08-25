@@ -9,6 +9,33 @@ from scipy.optimize import linear_sum_assignment
 from skimage.measure import label, regionprops
 
 
+from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, uniform_filter
+
+def phansalkar_threshold(image, window_size=51, k=0.25, r=0.5, p=2.0, q=10.0):
+    image = np.asarray(image, dtype=float)
+
+    mean = uniform_filter(image, size=window_size, mode="reflect")
+    mean_sq = uniform_filter(image**2, size=window_size, mode="reflect")
+
+    std = np.sqrt(np.maximum(mean_sq - mean**2, 0))
+
+    threshold = mean * (1 + p * np.exp(-q * mean) + k * ((std / r) - 1))
+
+    return threshold
+
+def create_gan_mask(z_processed, sigma=6, window_size=51, k=0.25, r=0.5):
+    z_smooth = gaussian_filter(z_processed, sigma=sigma, mode="reflect")
+
+    z_min = np.nanmin(z_smooth)
+    z_max = np.nanmax(z_smooth)
+    z_norm = (z_smooth - z_min) / (z_max - z_min + 1e-12)
+
+    threshold = phansalkar_threshold(z_norm, window_size=window_size, k=k, r=r)
+    gan_mask = z_norm > threshold
+
+    return gan_mask
+
 def extract_qd_features(image, ground_truth_mask, background_inner=3, background_outer=8):
     image = np.asarray(image, dtype=float)
     gt_mask = np.asarray(ground_truth_mask, dtype=bool)
@@ -126,6 +153,8 @@ def match_detections(qd_df, predicted_centres, tolerance=3.0,):
 
 
 def safe_name(name):
+    if name == "U-Net":
+        return "unet"
     return name.lower().replace(" ", "_").replace("-", "_")
 
 
@@ -263,3 +292,21 @@ def build_rescue_matrix(qd_df, algorithms):
             )
 
     return matrix
+
+
+def add_pit_status(qd_df, ground_truth_mask, pit_mask, overlap_threshold=0.5):
+    gt_labelled = label(np.asarray(ground_truth_mask, dtype=bool), connectivity=2)
+    pit_mask = np.asarray(pit_mask, dtype=bool)
+
+    pit_fractions = []
+
+    for region in regionprops(gt_labelled):
+        qd_pixels = gt_labelled == region.label
+        fraction = np.count_nonzero(qd_pixels & pit_mask) / np.count_nonzero(qd_pixels)
+        pit_fractions.append(fraction)
+
+    qd_df = qd_df.copy()
+    qd_df["pit_fraction"] = pit_fractions
+    qd_df["on_pit"] = qd_df["pit_fraction"] >= overlap_threshold
+
+    return qd_df
