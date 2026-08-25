@@ -1,24 +1,54 @@
-# Detection
+# QD Detection
 
-Quick note: this folder contains everything I worked on for **QD detection**, ranging from classical image-processing algorithms to bio-inspired methods and a few custom models/ideas I experimented with.
+## Purpose
 
-It also contains the notebooks that document the development process and how the different approaches evolved.
+Develop, optimise and compare methods for automatically detecting individual InGaN QDs in processed AFM scans.
 
-All the notebooks are starting with some code to set up connections between the files (because I was changing the organisation of the code so much.. Comes out, it does indeed get very messy!!)
+## Structure
 
-## Recommended notebook order
+* **`Classical-Optimised/`** — classical detection methods, optimisation and comparison.
+* **`Biology-Inspired/`** — pretrained segmentation models tested or adapted for AFM QDs.
+* **`Binary-CNN-Model/`** — task-specific binary U-Net training and prediction.
 
-1. **Transforms**  
-   Image preprocessing and transformations.
+## Classical methods tested
 
-2. **Detection**  
-   QD detection methods and algorithm comparisons.
+* Laplacian of Gaussian (LoG)
+* Otsu thresholding
+* Hough circle transform
+* Watershed segmentation
+* Perona–Malik anisotropic diffusion
+* Chambolle total-variation denoising
+* Morphological Geodesic Active Contours
+* Chan–Vese segmentation
+* SIFT
+* Gabor filtering
 
-3. **Analysis**  
-   Evaluation, error analysis, and investigation of missed detections.
+## Pretrained / external models tested
 
-After that, the remaining files contain the reusable algorithms, models, evaluation functions, and supporting utilities used throughout the notebooks.
+* Cellpose
+* Omnipose
+* StarDist
+* MicroSAM
+* Mesmer
+* Hover-Net
+* Mask R-CNN
 
+## Main notebooks
 
-Then best to look through the Classical algorithm folder to check the functions and see how their performance actually compares. 
-The same was done for the biological algorithms and the U-Nets.
+* **`npy-data-QD-DETECTION.ipynb`** — QD detection experiments using NumPy AFM data.
+* **`npy-data-TRANSFORMS.ipynb`** — image transformations and intermediate detection experiments.
+
+## Evaluation
+
+Methods are compared using common ground-truth scans with metrics including:
+
+* precision;
+* recall;
+* F1 score;
+* Dice coefficient;
+* IoU;
+* QD count;
+* object-level matching;
+* QD feature errors.
+
+Detailed analysis of missed QDs is kept in `QD-Analysis/`.

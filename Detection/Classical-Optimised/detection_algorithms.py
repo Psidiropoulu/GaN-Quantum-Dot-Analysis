@@ -18,7 +18,7 @@ from skimage.segmentation import (
     watershed,
 )
 from skimage.transform import hough_circle, hough_circle_peaks
-from Detection.detection_errors import evaluate_detection
+from detection_errors import evaluate_detection
 
 
 # CONSISTENT OUTPUT HELPERS
