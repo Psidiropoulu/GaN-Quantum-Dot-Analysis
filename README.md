@@ -22,10 +22,10 @@ This is a circular pipeline, as, of course, the more labelled data the better. W
 
 * **`Data-Conversion/`** — conversion of raw AFM data into Gwyddion and NumPy formats.
 * **`Ground-Truth/`** — manually labelled QDs and reference measurements.
-* **`Image-Preprocessing/`** — AFM flattening, destriping, background removal and filtering.
+* **`Image-Preprocessing/`** — AFM flattening, destriping, background removal and filterin (all custom methods, created to simplify the workflow and quality of the images).
 * **`Detection/`** — classical, pretrained and custom QD detection methods.
 * **`QD-Analysis/`** — QD morphology, pit distributions and detector failure analysis.
-* **`Methodology/`** — scientific write-up, references and presentation material.
+* **`Methodology/`** — more detailed project overview with better explanation behind each of the methods used.
 
 ## Detection approaches
 
@@ -37,6 +37,7 @@ The project compares:
 * a task-specific binary U-Net.
 
 Methods are evaluated primarily using object-level precision, recall and F1 score, together with errors in recovered QD properties.
+Image pre-processing is also evaluated for each of the algorithms based on same characteristics to understand which methods help QD detection the most. 
 
 ## Analysis
 

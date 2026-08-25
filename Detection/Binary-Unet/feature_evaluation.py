@@ -10,14 +10,33 @@ from scipy.spatial import KDTree
 from skimage.measure import label, regionprops
 from skimage.morphology import remove_small_objects
 
-PROJECT_ROOT = Path.cwd()
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve()
+
+while not (
+    (PROJECT_ROOT / "Detection").exists()
+    and (PROJECT_ROOT / "Image-Preprocessing").exists()
+):
+    if PROJECT_ROOT.parent == PROJECT_ROOT:
+        raise FileNotFoundError("Could not find project root.")
+    PROJECT_ROOT = PROJECT_ROOT.parent
+
 PREPROCESSING_DIR = PROJECT_ROOT / "Image-Preprocessing"
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PREPROCESSING_DIR))
+CLASSICAL_DIR = PROJECT_ROOT / "Detection" / "Classical-Optimised"
+BINARY_UNET_DIR = PROJECT_ROOT / "Detection" / "Binary-Unet"
+BIOLOGY_DIR = PROJECT_ROOT / "Detection" / "Biology-Inspired"
+QD_ANALYSIS_DIR = PROJECT_ROOT / "QD-Analysis"
+
+for path in [PROJECT_ROOT, PREPROCESSING_DIR, CLASSICAL_DIR, BINARY_UNET_DIR, BIOLOGY_DIR, QD_ANALYSIS_DIR]:
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 import basic_data_preprocessing as bdp
 import foreground_preprocessing as fp
-import Detection.detection_algorithms as da
+import detection_algorithms as da
+import detection_errors as de
 
 
 def evaluate_feature_masks(ground_truth_mask, predicted_mask, tolerance=3.0):

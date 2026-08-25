@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
+import math
+import matplotlib.pyplot as plt
 
 
 def count_error(predicted_count, true_count):
@@ -68,6 +70,131 @@ def iou_score(predicted_mask, true_mask):
     union = np.count_nonzero(predicted_mask | true_mask)
 
     return intersection / union if union > 0 else 1.0
+
+
+
+# Plotting histogram errors
+def plot_parameter_error_histograms(
+    algorithm_results,
+    true_result,
+    stage_key="after_height_filter",
+    parameter_key="radii",
+    parameter_label="Radius error (px)",
+    bins=20,
+    max_distance=5,
+):
+    algorithm_names = list(algorithm_results.keys())
+    n_methods = len(algorithm_names)
+
+    ncols = 3
+    nrows = math.ceil(n_methods / ncols)
+
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(5 * ncols, 4 * nrows),
+        constrained_layout=True,
+    )
+
+    axes = np.atleast_1d(axes).ravel()
+
+    for ax, algorithm_name in zip(axes, algorithm_names):
+        predicted_result = algorithm_results[algorithm_name][stage_key]
+
+        matches = match_qds(predicted_result["centres"], true_result["centres"], max_distance=max_distance)
+        predicted_indices = matches["predicted_indices"]
+        true_indices = matches["true_indices"]
+
+        predicted_values = np.asarray(predicted_result[parameter_key], dtype=float)
+        true_values = np.asarray(true_result[parameter_key], dtype=float)
+
+        errors = predicted_values[predicted_indices] - true_values[true_indices]
+        errors = errors[np.isfinite(errors)]
+
+        if len(errors) > 0:
+            ax.hist(
+                errors,
+                bins=bins,
+                alpha=0.7,
+            )
+            ax.axvline(0, linestyle="--")
+            ax.set_title(
+                f"{algorithm_name}\n"
+                f"mean error = {np.mean(errors):.4g}, n = {len(errors)}"
+            )
+        else:
+            ax.set_title(f"{algorithm_name}\nNo valid matched errors")
+
+        ax.set_xlabel(parameter_label)
+        ax.set_ylabel("Frequency")
+
+    for ax in axes[n_methods:]:
+        ax.axis("off")
+
+    plt.show()
+
+
+def finite_values(values):
+    values = np.asarray(values, dtype=float)
+    return values[np.isfinite(values)]
+
+
+def plot_parameter_histograms(
+    algorithm_results,
+    true_result,
+    stage_key="after_height_filter",
+    parameter_key="radii",
+    parameter_label="Radius (px)",
+    bins=20,
+):
+    algorithm_names = list(algorithm_results.keys())
+    n_methods = len(algorithm_names)
+
+    ncols = 3
+    nrows = math.ceil(n_methods / ncols)
+
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(5 * ncols, 4 * nrows),
+        constrained_layout=True,
+    )
+
+    axes = np.atleast_1d(axes).ravel()
+
+    true_values = finite_values(true_result[parameter_key])
+
+    for ax, algorithm_name in zip(axes, algorithm_names):
+        predicted_result = algorithm_results[algorithm_name][stage_key]
+        predicted_values = finite_values(predicted_result[parameter_key])
+
+        if len(true_values) > 0:
+            ax.hist(
+                true_values,
+                bins=bins,
+                alpha=0.5,
+                density=False,
+                label="Ground truth",
+            )
+
+        if len(predicted_values) > 0:
+            ax.hist(
+                predicted_values,
+                bins=bins,
+                alpha=0.5,
+                density=False,
+                label=algorithm_name,
+            )
+
+        ax.set_title(f"{algorithm_name} — {stage_key.replace('_', ' ')}")
+        ax.set_xlabel(parameter_label)
+        ax.set_ylabel("Frequency")
+        ax.legend()
+
+    for ax in axes[n_methods:]:
+        ax.axis("off")
+
+    plt.show()
 
 
 # before localisation or parameter errors, need to march predicted QDs to ground-truth QDs

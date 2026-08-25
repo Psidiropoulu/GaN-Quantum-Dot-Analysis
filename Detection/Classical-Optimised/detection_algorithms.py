@@ -21,6 +21,17 @@ from skimage.transform import hough_circle, hough_circle_peaks
 from detection_errors import evaluate_detection
 
 
+def ground_truth_parameters_from_mask(binary_mask):
+    labelled_mask = label(np.asarray(binary_mask, dtype=bool), connectivity=2)
+    regions = regionprops(labelled_mask)
+
+    centres = np.asarray([region.centroid for region in regions], dtype=float).reshape(-1, 2)
+    areas = np.asarray([region.area for region in regions], dtype=float)
+    radii = np.sqrt(areas / np.pi)
+
+    return centres, radii, areas
+
+
 # CONSISTENT OUTPUT HELPERS
 def _empty_centres():
     return np.empty((0, 2), dtype=float)
