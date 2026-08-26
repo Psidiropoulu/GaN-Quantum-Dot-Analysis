@@ -374,3 +374,32 @@ def fft_bandpass_filter(image, low_sigma=5, high_sigma=40,):
     large_scale = gaussian_filter(image, sigma=high_sigma,)
     filtered = small_scale - large_scale
     return filtered
+
+
+def remove_partial_horizontal_stripes(
+    image,
+    sigma_x=35,
+    sigma_y_small=1.0,
+    sigma_y_large=12.0,
+    strength=0.8,
+):
+    image = np.asarray(image, dtype=float)
+
+    finite = np.isfinite(image)
+    filled = image.copy()
+    filled[~finite] = np.nanmedian(image[finite])
+
+    # Slight pre-smoothing to reduce isolated dots dominating the estimate
+    pre = gaussian_filter(filled, sigma=(0.6, 0.6), mode="reflect",)
+
+    # Keep horizontally-elongated structures
+    horiz_small_y = gaussian_filter(pre, sigma=(sigma_y_small, sigma_x), mode="reflect",)
+    horiz_large_y = gaussian_filter(pre, sigma=(sigma_y_large, sigma_x), mode="reflect",)
+
+    # Horizontal stripe estimate: structures smooth in x, narrow in y
+    stripe_map = horiz_small_y - horiz_large_y
+    corrected = filled - strength * stripe_map
+    corrected[~finite] = np.nan
+    stripe_map[~finite] = np.nan
+
+    return corrected, stripe_map
