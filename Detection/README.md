@@ -29,9 +29,13 @@ Develop, optimise and compare methods for automatically detecting individual InG
 * Omnipose
 * StarDist
 * MicroSAM
-* Mesmer
-* Hover-Net
 * Mask R-CNN
+
+## Custom models
+* Random forest 
+* Stacked-ensemble Random forest (F1 0.9)
+* Binary U-net
+
 
 ## Main notebooks
 
