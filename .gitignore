@@ -83,5 +83,7 @@ dist/
 *.fbd_latexmk
 *.out
 *.fdb_latexmk
-*.tex
 *.toc
+*.gz
+*.synctex.gz
+*.synctex

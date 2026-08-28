@@ -34,7 +34,8 @@ The project compares:
 * classical image-processing methods;
 * pretrained segmentation models;
 * fine-tuned segmentation models;
-* a task-specific binary U-Net.
+* a task-specific binary U-Net;
+* task-specific random forest and a stacked random forest.
 
 Methods are evaluated primarily using object-level precision, recall and F1 score, together with errors in recovered QD properties.
 Image pre-processing is also evaluated for each of the algorithms based on same characteristics to understand which methods help QD detection the most. 
